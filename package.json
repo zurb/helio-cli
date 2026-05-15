@@ -1,5 +1,5 @@
 {
-  "name": "helio-cli",
+  "name": "@zurb/helio-cli",
   "version": "0.1.0",
   "description": "CLI for the Helio Public API",
   "type": "module",
@@ -9,9 +9,13 @@
   "files": [
     "dist/index.js"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsup",
-    "dev": "tsup --watch"
+    "dev": "tsup --watch",
+    "prepublishOnly": "npm run build"
   },
   "engines": {
     "node": ">=22"
