@@ -2,7 +2,8 @@
 helio-cli landing page — content document
 
 Audience: developers first, UX researchers and PMs second.
-Primary CTA: npm install -g helio-cli (used exactly 3 times: hero, quickstart, footer).
+Primary CTA: `npm install -g @zurb/helio-cli` (used exactly 3 times: hero, quickstart, footer).
+Binary on $PATH is still `helio-cli` — all other commands on this page use it unchanged.
 Positioning: the fastest way to launch a UX test — idea to live, under a minute, from your terminal.
 Voice: action-first, every claim backed by a one-liner, no marketing fluff.
 
@@ -23,7 +24,7 @@ No new dashboard to learn. No new login to keep open. Same Helio platform you al
 
 <!-- Hero layout: large headline, one-paragraph subhead, two CTAs side-by-side, terminal block below spanning full width -->
 
-**`npm install -g helio-cli`** &nbsp; &nbsp; [Read the quickstart →](#try-it-now)
+**`npm install -g @zurb/helio-cli`** &nbsp; &nbsp; [Read the quickstart →](#try-it-now)
 
 ```bash
 $ helio-cli tests create \
@@ -33,11 +34,14 @@ $ helio-cli tests create \
     --target-audience-size 50 \
     --ux-metrics sentiment loyalty
 
-Test draft created · 9c3b-...-4a21
+id      9c3b-...-4a21
+name    Checkout sentiment check
+status  draft
 
 $ helio-cli tests send 9c3b-...-4a21
 
-Live. Responses streaming.
+id      9c3b-...-4a21
+status  live
 ```
 
 ---
@@ -69,7 +73,7 @@ helio-cli tests create \
 helio-cli tests send <test-uuid>
 ```
 
-That's the whole demo. Two commands, one live UX test, results streaming in within minutes.
+That's the whole demo. Three commands, one live UX test, responses landing as participants complete.
 
 ---
 
@@ -93,7 +97,7 @@ Eleven standardized metrics, attached to any test with a single flag. Customize 
 ```bash
 helio-cli tests report <uuid> --include questions_summary,demographics,ux_metrics
 ```
-Summary stats, full response data, demographics filters, pagination, prototype journeys. Output as text for humans or JSON for pipelines.
+Summary stats, full response data, demographics filters, and pagination. Output as text for humans or JSON for pipelines.
 
 **Manage participants and custom lists.**
 ```bash
@@ -209,7 +213,7 @@ Same platform you know. Faster surface to work on. The web app is still there wh
 
 1. **Install.**
    ```bash
-   npm install -g helio-cli
+   npm install -g @zurb/helio-cli
    ```
 
 2. **Log in.**
@@ -243,7 +247,7 @@ For everything else: the [GitHub repo](#) and the [API reference](#).
 ## Helio CLI is open and ready.
 
 ```bash
-npm install -g helio-cli
+npm install -g @zurb/helio-cli
 ```
 
 [Docs](#) · [API reference](#) · [Support](#) · [Status](#)
