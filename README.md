@@ -5,7 +5,11 @@ Command-line interface for the [Helio](https://helio.app) Public API. Create tes
 ## Installation
 
 ```bash
-npm install -g helio-cli
+# Run without installing
+npx @zurb/helio-cli --help
+
+# Or install globally
+npm install -g @zurb/helio-cli
 ```
 
 Requires Node.js >= 22.
