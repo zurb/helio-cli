@@ -1166,17 +1166,17 @@ async function runInteractiveWalkthrough(test: TestShowResponse, screens: Walkth
       for (const line of renderWalkthroughScreen(screen)) console.log(line);
       console.log();
       const existing = answers.get(screen.position);
-      if (existing !== undefined && existing !== '') {
+      if (existing) {
         console.log(`  \x1b[90mprevious answer: ${existing}\x1b[0m`);
       }
-      const backHint = i === 0 ? '' : ' · b back';
-      console.log(`  \x1b[90m${inputHint(screen)}${backHint} · q quit\x1b[0m`);
+      const backHint = i === 0 ? '' : ' · type "back" to go back';
+      console.log(`  \x1b[90m${inputHint(screen)}${backHint} · type "quit" to exit\x1b[0m`);
 
       const raw = await rl.question('  ▸ ');
-      const trimmed = raw.trim();
+      const navKey = raw.trim().toLowerCase();
 
-      if (trimmed === 'q' || trimmed === 'Q') break;
-      if (trimmed === 'b' || trimmed === 'B') {
+      if (navKey === 'quit') break;
+      if (navKey === 'back') {
         if (i > 0) i -= 1;
         continue;
       }
@@ -1187,7 +1187,11 @@ async function runInteractiveWalkthrough(test: TestShowResponse, screens: Walkth
         await rl.question('  ↵ to retry ');
         continue;
       }
-      if (result.display) answers.set(screen.position, result.display);
+      if (result.display) {
+        answers.set(screen.position, result.display);
+      } else {
+        answers.delete(screen.position);
+      }
       i += 1;
     }
   } finally {
