@@ -1,4 +1,6 @@
 import { Command } from 'commander';
+import * as readline from 'node:readline/promises';
+import { stdin as input, stdout as output } from 'node:process';
 import { resolveCredentials } from '../config.js';
 import { HelioClient } from '../client.js';
 import { isJsonMode, printJson, printTable, printKeyValue, withErrorHandling, parseJsonOrFile } from '../output.js';
@@ -811,6 +813,427 @@ function formatValidationErrors(errors: ValidationError[]): string {
 
 // ── Command registration ─────────────────────────────────────────────
 
+// ── Walkthrough (participant-eye view) ───────────────────────────────
+
+type WalkthroughScreen =
+  | { kind: 'intro'; position: number; text: string }
+  | {
+      kind: 'question';
+      position: number;
+      q_number: number;
+      type: string;            // canonical snake_case (multiple_choice, free_response, …)
+      type_label: string;
+      raw_type: string;        // original API type (e.g. MultipleChoiceDirectiveSection)
+      question: string;
+      choices: string[];
+      randomize_choices: boolean;
+      allow_multiple: boolean;
+      scale_type?: string;
+      ux_metric?: string;
+      renderable: 'full' | 'placeholder';
+    };
+
+const ASSET_HEAVY_RAW_TYPES = new Set([
+  'ClickTestDirectiveSection',
+  'TreeTestDirectiveSection',
+  'PrototypeDirectiveSection',
+]);
+
+// Maps API section type → canonical snake_case
+const RAW_TYPE_TO_CANONICAL: Record<string, string> = {
+  FreeResponseDirectiveSection: 'free_response',
+  MultipleChoiceDirectiveSection: 'multiple_choice',
+  LikertDirectiveSection: 'likert',
+  NpsDirectiveSection: 'nps',
+  PreferenceDirectiveSection: 'preference',
+  RankingDirectiveSection: 'ranking',
+  MatrixDirectiveSection: 'matrix',
+  ClickTestDirectiveSection: 'click_test',
+  CardSortDirectiveSection: 'card_sort',
+  TreeTestDirectiveSection: 'tree_test',
+  MaxDiffDirectiveSection: 'max_diff',
+  PointAllocationDirectiveSection: 'point_allocation',
+  PrototypeDirectiveSection: 'prototype_task',
+};
+
+// Endpoints for likert scale visualisations
+const LIKERT_LABEL_SETS: Record<string, [string, string]> = {
+  agreement: ['Strongly disagree', 'Strongly agree'],
+  occurrence: ['Never', 'Always'],
+  importance: ['Not important', 'Very important'],
+  quality: ['Very poor', 'Very good'],
+  comprehension: ['Not at all', 'Completely'],
+  impression: ['Very negative', 'Very positive'],
+  expectations: ['Far below', 'Far above'],
+  usefulness: ['Not useful', 'Very useful'],
+  difficulty: ['Very difficult', 'Very easy'],
+  likelihood: ['Very unlikely', 'Very likely'],
+};
+
+function buildWalkthroughScreens(test: TestShowResponse): WalkthroughScreen[] {
+  const screens: WalkthroughScreen[] = [];
+  const intro = stripHtml(test.introduction || '');
+  if (intro) {
+    screens.push({ kind: 'intro', position: 1, text: intro });
+  }
+
+  const sections = [...(test.sections ?? [])].sort((a, b) => a.position - b.position);
+  let qNumber = 0;
+  for (const s of sections) {
+    qNumber += 1;
+    const canonical = RAW_TYPE_TO_CANONICAL[s.type] ?? s.type;
+    const variation = s.variations?.[0];
+    const choices = variation?.choices
+      ? [...variation.choices].sort((a, b) => a.position - b.position).map(c => c.text)
+      : [];
+
+    const uxMetric = (s as { ux_metric?: { metric_type?: string } }).ux_metric?.metric_type;
+    const randomize = Boolean((s as { randomize_choices?: unknown }).randomize_choices);
+    const allowMultiple = Boolean((s as { allow_multiple?: unknown }).allow_multiple);
+
+    screens.push({
+      kind: 'question',
+      position: screens.length + 1,
+      q_number: qNumber,
+      type: canonical,
+      type_label: TYPE_LABELS[s.type] ?? TYPE_LABELS[canonical] ?? canonical,
+      raw_type: s.type,
+      question: s.stripped_instructions || stripHtml(s.instructions || ''),
+      choices,
+      randomize_choices: randomize,
+      allow_multiple: allowMultiple,
+      scale_type: s.likert_type || undefined,
+      ux_metric: uxMetric,
+      renderable: ASSET_HEAVY_RAW_TYPES.has(s.type) ? 'placeholder' : 'full',
+    });
+  }
+
+  return screens;
+}
+
+const LETTERS = 'abcdefghijklmnopqrstuvwxyz';
+
+function renderWalkthroughScreen(screen: WalkthroughScreen): string[] {
+  const lines: string[] = [];
+  if (screen.kind === 'intro') {
+    lines.push(`  ${screen.text}`);
+    lines.push('');
+    lines.push('  [ Start ]');
+    return lines;
+  }
+
+  lines.push(`  ${screen.question}`);
+  if (screen.ux_metric) {
+    lines.push(`  \x1b[90m⚲ UX metric: ${screen.ux_metric}\x1b[0m`);
+  }
+  lines.push('');
+
+  if (screen.renderable === 'placeholder') {
+    const hint =
+      screen.type === 'prototype_task'
+        ? 'prototype task'
+        : screen.type === 'click_test'
+          ? 'click test'
+          : 'tree test';
+    lines.push(`  \x1b[90m🖼  [${hint}] — open in the Helio browser preview to interact\x1b[0m`);
+    if (screen.choices.length) {
+      for (const c of screen.choices) lines.push(`    · ${c}`);
+    }
+    lines.push('');
+    lines.push('  [ Next ]');
+    return lines;
+  }
+
+  switch (screen.type) {
+    case 'multiple_choice': {
+      const bullet = screen.allow_multiple ? '☐' : '○';
+      for (let i = 0; i < screen.choices.length; i++) {
+        lines.push(`    ${LETTERS[i] ?? i + 1}) ${bullet} ${screen.choices[i]}`);
+      }
+      if (screen.randomize_choices) {
+        lines.push('');
+        lines.push('  \x1b[90mⓘ choices randomized per participant\x1b[0m');
+      }
+      if (screen.allow_multiple) {
+        lines.push('  \x1b[90mⓘ multiple selections allowed\x1b[0m');
+      }
+      break;
+    }
+    case 'free_response': {
+      lines.push('  ┌──────────────────────────────────────┐');
+      lines.push('  │                                      │');
+      lines.push('  │                                      │');
+      lines.push('  │                                      │');
+      lines.push('  └──────────────────────────────────────┘');
+      break;
+    }
+    case 'likert': {
+      const labels = LIKERT_LABEL_SETS[screen.scale_type ?? ''];
+      const custom = screen.choices.length ? screen.choices : null;
+      if (custom) {
+        for (let i = 0; i < custom.length; i++) {
+          lines.push(`    ${i + 1}) ○ ${custom[i]}`);
+        }
+      } else {
+        lines.push('    1   2   3   4   5');
+        if (labels) {
+          lines.push(`    \x1b[90m${labels[0]} → ${labels[1]}\x1b[0m`);
+        }
+      }
+      if (screen.scale_type) {
+        lines.push('');
+        lines.push(`  \x1b[90mScale: ${screen.scale_type}\x1b[0m`);
+      }
+      break;
+    }
+    case 'nps': {
+      lines.push('    0   1   2   3   4   5   6   7   8   9   10');
+      lines.push('    └─── detractors ────┘ └ passives ┘ └ promoters ─┘');
+      break;
+    }
+    case 'ranking': {
+      for (let i = 0; i < screen.choices.length; i++) {
+        lines.push(`    ${i + 1}. ⇅ ${screen.choices[i]}`);
+      }
+      lines.push('');
+      lines.push('  \x1b[90m⚏ drag to reorder — open in browser for full view\x1b[0m');
+      break;
+    }
+    case 'preference': {
+      for (let i = 0; i < screen.choices.length; i++) {
+        lines.push(`    ${LETTERS[i] ?? i + 1}) ⬚ ${screen.choices[i]}`);
+      }
+      lines.push('');
+      lines.push('  \x1b[90m⚏ side-by-side images — open in browser for full view\x1b[0m');
+      break;
+    }
+    case 'matrix':
+    case 'card_sort':
+    case 'max_diff':
+    case 'point_allocation': {
+      for (const c of screen.choices) lines.push(`    · ${c}`);
+      lines.push('');
+      lines.push(`  \x1b[90m⚏ ${screen.type_label.toLowerCase()} layout — open in browser for full view\x1b[0m`);
+      break;
+    }
+    default: {
+      for (const c of screen.choices) lines.push(`    · ${c}`);
+    }
+  }
+
+  lines.push('');
+  lines.push('  [ Next ]');
+  return lines;
+}
+
+function walkthroughHeader(screen: WalkthroughScreen, total: number, totalQuestions: number): string {
+  const left = `Screen ${screen.position} of ${total}`;
+  if (screen.kind === 'intro') return `${left} · Introduction`;
+  return `${left} · Q${screen.q_number} of ${totalQuestions} · ${screen.type_label}`;
+}
+
+function printWalkthroughHeader(test: TestShowResponse, totalQuestions: number): void {
+  const status = formatStatus(String(test.status ?? 'unknown'));
+  const responses = test.responses_count ?? 0;
+  console.log(`\n\x1b[1m${test.name}\x1b[0m  ${status} — ${totalQuestions} question${totalQuestions === 1 ? '' : 's'}, ${responses} response${responses === 1 ? '' : 's'}`);
+  if (test.project_name) console.log(`Project: ${test.project_name}`);
+  console.log();
+}
+
+function printSeparator(): void {
+  console.log('──────────────────────────────────────────');
+}
+
+function runStaticWalkthrough(test: TestShowResponse, screens: WalkthroughScreen[]): void {
+  const totalQuestions = screens.filter(s => s.kind === 'question').length;
+  printWalkthroughHeader(test, totalQuestions);
+
+  if (screens.length === 0) {
+    console.log('  (no screens — test has no introduction and no questions)');
+    console.log();
+    return;
+  }
+
+  for (const screen of screens) {
+    printSeparator();
+    console.log(` \x1b[1m${walkthroughHeader(screen, screens.length, totalQuestions)}\x1b[0m`);
+    printSeparator();
+    console.log();
+    for (const line of renderWalkthroughScreen(screen)) console.log(line);
+    console.log();
+  }
+}
+
+function inputHint(screen: WalkthroughScreen): string {
+  if (screen.kind === 'intro') return '↵ to start';
+  if (screen.renderable === 'placeholder') return '↵ to advance (cannot answer in terminal)';
+  switch (screen.type) {
+    case 'multiple_choice': {
+      const max = Math.min(screen.choices.length, LETTERS.length);
+      const range = max ? `${LETTERS[0]}–${LETTERS[max - 1]}` : '';
+      return screen.allow_multiple
+        ? `pick one or more (${range}, comma-separated), or ↵ to skip`
+        : `pick ${range}, or ↵ to skip`;
+    }
+    case 'free_response':
+      return 'type a response, or ↵ to skip';
+    case 'likert':
+      return screen.choices.length
+        ? `pick 1–${screen.choices.length}, or ↵ to skip`
+        : 'pick 1–5, or ↵ to skip';
+    case 'nps':
+      return 'pick 0–10, or ↵ to skip';
+    case 'ranking':
+    case 'preference':
+    case 'matrix':
+    case 'card_sort':
+    case 'max_diff':
+    case 'point_allocation':
+      return 'type a note about your answer, or ↵ to skip';
+    default:
+      return '↵ to advance';
+  }
+}
+
+function interpretAnswer(screen: WalkthroughScreen, raw: string): { ok: true; display: string } | { ok: false; message: string } {
+  const trimmed = raw.trim();
+  if (screen.kind === 'intro' || screen.renderable === 'placeholder') {
+    return { ok: true, display: '' };
+  }
+  switch (screen.type) {
+    case 'multiple_choice': {
+      const picks = trimmed.split(',').map(p => p.trim().toLowerCase()).filter(Boolean);
+      if (picks.length === 0) return { ok: true, display: '' };
+      if (!screen.allow_multiple && picks.length > 1) {
+        return { ok: false, message: 'This question only accepts one selection.' };
+      }
+      const labels: string[] = [];
+      for (const p of picks) {
+        const idx = LETTERS.indexOf(p);
+        if (idx < 0 || idx >= screen.choices.length) {
+          return { ok: false, message: `"${p}" is not one of the available choices.` };
+        }
+        labels.push(screen.choices[idx]);
+      }
+      return { ok: true, display: labels.join(', ') };
+    }
+    case 'likert': {
+      if (!trimmed) return { ok: true, display: '' };
+      const n = Number(trimmed);
+      const max = screen.choices.length || 5;
+      if (!Number.isInteger(n) || n < 1 || n > max) {
+        return { ok: false, message: `Pick an integer between 1 and ${max}.` };
+      }
+      const label = screen.choices[n - 1];
+      return { ok: true, display: label ? `${n} (${label})` : String(n) };
+    }
+    case 'nps': {
+      if (!trimmed) return { ok: true, display: '' };
+      const n = Number(trimmed);
+      if (!Number.isInteger(n) || n < 0 || n > 10) {
+        return { ok: false, message: 'Pick an integer between 0 and 10.' };
+      }
+      return { ok: true, display: String(n) };
+    }
+    case 'free_response':
+    default:
+      return { ok: true, display: trimmed };
+  }
+}
+
+async function runInteractiveWalkthrough(test: TestShowResponse, screens: WalkthroughScreen[]): Promise<void> {
+  const totalQuestions = screens.filter(s => s.kind === 'question').length;
+  const answers = new Map<number, string>();
+
+  if (screens.length === 0) {
+    printWalkthroughHeader(test, totalQuestions);
+    console.log('  (no screens — test has no introduction and no questions)');
+    console.log();
+    return;
+  }
+
+  const rl = readline.createInterface({ input, output });
+  try {
+    let i = 0;
+    while (i < screens.length) {
+      const screen = screens[i];
+      output.write('\x1b[2J\x1b[H');
+      printWalkthroughHeader(test, totalQuestions);
+      printSeparator();
+      console.log(` \x1b[1m${walkthroughHeader(screen, screens.length, totalQuestions)}\x1b[0m`);
+      printSeparator();
+      console.log();
+      for (const line of renderWalkthroughScreen(screen)) console.log(line);
+      console.log();
+      const existing = answers.get(screen.position);
+      if (existing) {
+        console.log(`  \x1b[90mprevious answer: ${existing}\x1b[0m`);
+      }
+      const backHint = i === 0 ? '' : ' · type "back" to go back';
+      console.log(`  \x1b[90m${inputHint(screen)}${backHint} · type "quit" to exit\x1b[0m`);
+
+      const raw = await rl.question('  ▸ ');
+      const navKey = raw.trim().toLowerCase();
+
+      if (navKey === 'quit') break;
+      if (navKey === 'back') {
+        if (i > 0) i -= 1;
+        continue;
+      }
+
+      const result = interpretAnswer(screen, raw);
+      if (!result.ok) {
+        console.log(`  \x1b[31m${result.message}\x1b[0m`);
+        await rl.question('  ↵ to retry ');
+        continue;
+      }
+      if (result.display) {
+        answers.set(screen.position, result.display);
+      } else {
+        answers.delete(screen.position);
+      }
+      i += 1;
+    }
+  } finally {
+    rl.close();
+  }
+
+  output.write('\x1b[2J\x1b[H');
+  printWalkthroughHeader(test, totalQuestions);
+  printSeparator();
+  console.log(' \x1b[1mWalkthrough complete (simulated — nothing was sent to Helio)\x1b[0m');
+  printSeparator();
+  console.log();
+  for (const screen of screens) {
+    if (screen.kind !== 'question') continue;
+    const answer = answers.get(screen.position);
+    const label = `Q${screen.q_number}`.padEnd(4);
+    console.log(`  ${label} ${answer && answer !== '' ? answer : '\x1b[90m(skipped)\x1b[0m'}`);
+  }
+  console.log();
+}
+
+function walkthroughScreenJson(screen: WalkthroughScreen): Record<string, unknown> {
+  if (screen.kind === 'intro') {
+    return { position: screen.position, kind: 'intro', text: screen.text };
+  }
+  return {
+    position: screen.position,
+    kind: 'question',
+    q_number: screen.q_number,
+    type: screen.type,
+    type_label: screen.type_label,
+    raw_type: screen.raw_type,
+    question: screen.question,
+    choices: screen.choices,
+    randomize_choices: screen.randomize_choices,
+    allow_multiple: screen.allow_multiple,
+    scale_type: screen.scale_type ?? null,
+    ux_metric: screen.ux_metric ?? null,
+    renderable: screen.renderable,
+  };
+}
+
 export function registerTestsCommand(program: Command): void {
   const cmd = program.command('tests').alias('t').description('Manage tests');
 
@@ -1111,6 +1534,39 @@ export function registerTestsCommand(program: Command): void {
         }
 
         console.log();
+      }),
+    );
+
+  cmd
+    .command('walkthrough <id>')
+    .description('Step through a test the way a participant sees it (screen-by-screen)')
+    .option('--interactive', 'Prompt one screen at a time instead of dumping all screens')
+    .action(
+      withErrorHandling(async (id: string, cmdOpts: { interactive?: boolean }) => {
+        const client = makeClient(program);
+        const { test } = (await client.get(`tests/${id}`)) as { test: TestShowResponse };
+        const screens = buildWalkthroughScreens(test);
+
+        if (isJsonMode()) {
+          printJson({
+            test: {
+              id: test.id,
+              name: test.name,
+              status: test.status,
+              responses_count: test.responses_count,
+              project_id: test.project_id,
+              project_name: test.project_name,
+            },
+            screens: screens.map(walkthroughScreenJson),
+          });
+          return;
+        }
+
+        if (cmdOpts.interactive) {
+          await runInteractiveWalkthrough(test, screens);
+        } else {
+          runStaticWalkthrough(test, screens);
+        }
       }),
     );
 

@@ -95,7 +95,14 @@ helio-cli tests add-question <test-uuid> \
 # Preview and launch
 helio-cli tests preview <test-uuid>
 helio-cli tests send <test-uuid>
+
+# Walk through the test the way a participant sees it
+helio-cli tests walkthrough <test-uuid>                 # one screen per page, all at once
+helio-cli tests walkthrough <test-uuid> --interactive   # advance one screen at a time (TTY required)
+helio-cli tests walkthrough <test-uuid> --output json   # structured screen list
 ```
+
+`preview` is a structural summary (every question on one page). `walkthrough` renders each participant screen separately — intro, then each question with its own input UI (radio buttons, text box, NPS row, etc.) — so you can comprehend the experience step by step. Asset-heavy types (prototypes, click tests, tree tests) render a placeholder pointing to the Helio browser preview.
 
 ### Question Types
 

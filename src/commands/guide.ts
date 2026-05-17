@@ -158,8 +158,13 @@ const GUIDE = `
     $ helio-cli tests ux-metric-types
     $ helio-cli tests ux-metric-types --type sentiment
 
-  Preview what you've built:
+  Preview what you've built (flat structural summary):
     $ helio-cli tests preview <test-uuid>
+
+  Walk through the test the way a participant sees it (one screen per page):
+    $ helio-cli tests walkthrough <test-uuid>
+    $ helio-cli tests walkthrough <test-uuid> --interactive   # advance one at a time (TTY required)
+    $ helio-cli tests walkthrough <test-uuid> --output json   # structured screen list
 
   Launch the draft:
     $ helio-cli tests send <test-uuid>
@@ -272,8 +277,9 @@ const GUIDE_JSON = {
     '3. helio-cli tests create --dry-run ...               # validate before creating',
     '4. helio-cli tests create ...                         # create draft',
     '5. helio-cli tests preview <id>                       # verify structure',
-    '6. helio-cli tests send <id>                          # launch',
-    '7. helio-cli tests report <id> --output json          # get results',
+    '6. helio-cli tests walkthrough <id>                   # see what a participant experiences, step by step',
+    '7. helio-cli tests send <id>                          # launch',
+    '8. helio-cli tests report <id> --output json          # get results',
   ],
   commands: {
     auth: {
@@ -305,6 +311,14 @@ const GUIDE_JSON = {
         description: 'Human-readable summary of a test with questions, choices, and results',
         args: '<id>',
         note: 'Use this to verify a test looks correct before launching.',
+      },
+      walkthrough: {
+        description: 'Step through a test screen-by-screen the way a participant sees it',
+        args: '<id>',
+        options: {
+          '--interactive': 'Prompt one screen at a time, capture answers, print recap (TTY required). Type "back" / "quit" to navigate.',
+        },
+        note: 'Complements preview: preview is a flat structural summary, walkthrough renders each participant screen separately (intro + per-question UI). Asset-heavy types (prototype_task, click_test, tree_test) render a placeholder pointing to the Helio browser preview. With --output json, emits { test, screens: [...] }.',
       },
       create: {
         description: 'Create a new test (saved as draft)',
