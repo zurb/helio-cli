@@ -205,7 +205,7 @@ const QUESTION_TYPES = {
 
 // ── Types for preview ────────────────────────────────────────────────
 
-interface TestShowResponse {
+export interface TestShowResponse {
   id: string;
   name: string;
   status: string;
@@ -815,7 +815,7 @@ export function formatValidationErrors(errors: ValidationError[]): string {
 
 // ── Walkthrough (participant-eye view) ───────────────────────────────
 
-type WalkthroughScreen =
+export type WalkthroughScreen =
   | { kind: 'intro'; position: number; text: string }
   | {
       kind: 'question';
@@ -870,7 +870,7 @@ const LIKERT_LABEL_SETS: Record<string, [string, string]> = {
   likelihood: ['Very unlikely', 'Very likely'],
 };
 
-function buildWalkthroughScreens(test: TestShowResponse): WalkthroughScreen[] {
+export function buildWalkthroughScreens(test: TestShowResponse): WalkthroughScreen[] {
   const screens: WalkthroughScreen[] = [];
   const intro = stripHtml(test.introduction || '');
   if (intro) {
@@ -1213,7 +1213,7 @@ async function runInteractiveWalkthrough(test: TestShowResponse, screens: Walkth
   console.log();
 }
 
-function walkthroughScreenJson(screen: WalkthroughScreen): Record<string, unknown> {
+export function walkthroughScreenJson(screen: WalkthroughScreen): Record<string, unknown> {
   if (screen.kind === 'intro') {
     return { position: screen.position, kind: 'intro', text: screen.text };
   }
