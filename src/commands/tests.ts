@@ -393,7 +393,7 @@ function buildQuestionsFromSections(sections: SectionData[] | undefined): unknow
     }));
 }
 
-function parsePositiveInt(value: string | undefined, flagName: string): number {
+export function parsePositiveInt(value: string | undefined, flagName: string): number {
   if (value === undefined || value === '') {
     throw new Error(`${flagName} is required`);
   }
@@ -449,7 +449,7 @@ interface QuestionInput {
   [key: string]: unknown;
 }
 
-interface ValidationError {
+export interface ValidationError {
   question: number;
   field: string;
   message: string;
@@ -550,7 +550,7 @@ const EXCLUDED_UX_METRIC_TYPES = [
   'brand_score', 'engagement', 'success', 'completion', 'usability', 'satisfaction', 'effort',
 ];
 
-function validateUxMetrics(metrics: unknown): ValidationError[] {
+export function validateUxMetrics(metrics: unknown): ValidationError[] {
   const errors: ValidationError[] = [];
 
   if (!Array.isArray(metrics)) {
@@ -604,7 +604,7 @@ function validateStringItems(items: unknown[], field: string, questionNum: numbe
   }
 }
 
-function validateQuestions(questions: unknown): ValidationError[] {
+export function validateQuestions(questions: unknown): ValidationError[] {
   const errors: ValidationError[] = [];
 
   if (!Array.isArray(questions)) {
@@ -803,7 +803,7 @@ function validateQuestions(questions: unknown): ValidationError[] {
   return errors;
 }
 
-function formatValidationErrors(errors: ValidationError[]): string {
+export function formatValidationErrors(errors: ValidationError[]): string {
   const lines = errors.map(e => {
     const prefix = e.question > 0 ? `  Question ${e.question}` : '  Questions';
     return `${prefix} → ${e.field}: ${e.message}`;
