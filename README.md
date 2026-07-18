@@ -100,9 +100,16 @@ helio-cli tests send <test-uuid>
 helio-cli tests walkthrough <test-uuid>                 # one screen per page, all at once
 helio-cli tests walkthrough <test-uuid> --interactive   # advance one screen at a time (TTY required)
 helio-cli tests walkthrough <test-uuid> --output json   # structured screen list
+
+# Read what real respondents actually answered, one journey at a time
+helio-cli tests participants <test-uuid>                      # transcript per respondent
+helio-cli tests participants <test-uuid> --group-by cohort    # cluster by cohort
+helio-cli tests participants <test-uuid> --sentiment negative --output json
 ```
 
 `preview` is a structural summary (every question on one page). `walkthrough` renders each participant screen separately — intro, then each question with its own input UI (radio buttons, text box, NPS row, etc.) — so you can comprehend the experience step by step. Asset-heavy types (prototypes, click tests, tree tests) render a placeholder pointing to the Helio browser preview.
+
+`participants` is the report seen one respondent at a time: where `walkthrough` shows the empty test structure and `tests report` shows aggregates, `participants` stitches each person's answers together in order — the rating, the follow-up "why", and that answer's sentiment, plus demographics, audience type, and cohorts. It accepts the same demographic/segment/sentiment filters as `report`, supports `--group-by cohort|audience_type`, and emits flat `{ study, participants: [...] }` JSON for piping into `jq`. It's a convenience wrapper over `tests report --include participants`. Note: `cohorts` is empty for non-enroll recruits, and `sentiment` / prototype grade are eventually consistent — a `null` means "not computed yet" (shown as *pending*), never neutral.
 
 ### Question Types
 

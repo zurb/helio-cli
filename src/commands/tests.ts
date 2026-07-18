@@ -269,6 +269,39 @@ interface ReportResponse {
   [key: string]: unknown;
 }
 
+// ── Types for the `participants` report include ──────────────────────
+
+interface JourneyStep {
+  section_id: string;
+  question_type: string;
+  metric?: string | null;
+  why?: string | null;
+  sentiment?: string | null;
+  selected?: { text?: string | null; value?: number | string | null }[];
+  grade?: string | null;
+  duration_seconds?: number | null;
+  [key: string]: unknown;
+}
+
+interface ReportParticipant {
+  participant_id: string;
+  response_index?: number;
+  response_time_ms?: number | null;
+  flagged?: boolean;
+  hidden?: boolean;
+  demographics?: Record<string, unknown>;
+  audience_type?: string;
+  cohorts?: { id: string; name: string }[];
+  journey?: JourneyStep[];
+  [key: string]: unknown;
+}
+
+interface ParticipantsReportResponse {
+  study?: Record<string, unknown>;
+  participants?: ReportParticipant[];
+  [key: string]: unknown;
+}
+
 // ── Preview helpers ──────────────────────────────────────────────────
 
 const TYPE_LABELS: Record<string, string> = {
@@ -1042,6 +1075,125 @@ function printWalkthroughHeader(test: TestShowResponse, totalQuestions: number):
 
 function printSeparator(): void {
   console.log('──────────────────────────────────────────');
+}
+
+// ── `tests participants` rendering ───────────────────────────────────
+
+// Short, scannable id for headers (full id is always in --output json).
+function shortId(id: string): string {
+  return id.length > 16 ? `${id.slice(0, 14)}…` : id;
+}
+
+function participantDemoSummary(demo: Record<string, unknown> | undefined): string {
+  if (!demo) return '';
+  return ['age', 'gender', 'country']
+    .map(k => demo[k])
+    .filter(v => v != null && v !== '')
+    .map(String)
+    .join(' · ');
+}
+
+// sentiment & prototype grade/duration are eventually consistent (async
+// workers): null means "not computed yet", NOT neutral. Render it distinctly.
+function formatSentiment(sentiment: string | null | undefined): string {
+  if (sentiment == null) return '\x1b[90m(sentiment pending)\x1b[0m';
+  const colors: Record<string, string> = {
+    positive: '\x1b[32m', // green
+    negative: '\x1b[31m', // red
+    neutral: '\x1b[90m', // gray
+  };
+  const color = colors[sentiment] ?? '\x1b[90m';
+  return `${color}(${sentiment})\x1b[0m`;
+}
+
+function formatSelected(selected: JourneyStep['selected']): string {
+  if (!selected || selected.length === 0) return '';
+  return selected
+    .map(s => {
+      const text = s.text != null && s.text !== '' ? `"${s.text}"` : '';
+      const value = s.value != null && s.value !== '' ? String(s.value) : '';
+      if (text && value) return `${text} (${value})`;
+      return text || value;
+    })
+    .filter(Boolean)
+    .join(', ');
+}
+
+function renderParticipant(p: ReportParticipant, ordinal: number): string[] {
+  const lines: string[] = [];
+  const idx = p.response_index != null ? `#${p.response_index}` : `#${ordinal}`;
+  const badges: string[] = [];
+  if (p.flagged) badges.push('\x1b[31m⚑ flagged\x1b[0m');
+  if (p.hidden) badges.push('\x1b[90m⦸ hidden\x1b[0m');
+
+  lines.push(`\x1b[1mParticipant ${idx}\x1b[0m  \x1b[90m${shortId(p.participant_id)}\x1b[0m${badges.length ? `  ${badges.join('  ')}` : ''}`);
+
+  const meta: string[] = [];
+  if (p.audience_type) meta.push(p.audience_type);
+  const demo = participantDemoSummary(p.demographics);
+  if (demo) meta.push(demo);
+  if (p.response_time_ms != null) meta.push(`${(p.response_time_ms / 1000).toFixed(1)}s`);
+  if (meta.length) lines.push(`\x1b[90m${meta.join(' · ')}\x1b[0m`);
+
+  if (p.cohorts && p.cohorts.length) {
+    lines.push(`\x1b[90mcohorts: ${p.cohorts.map(c => c.name).join(', ')}\x1b[0m`);
+  }
+
+  lines.push('');
+
+  const journey = p.journey ?? [];
+  if (journey.length === 0) {
+    lines.push('  \x1b[90m(no journey steps)\x1b[0m');
+  }
+  journey.forEach((step, i) => {
+    const label = TYPE_LABELS[step.question_type] ?? step.question_type;
+    const metric = step.metric ? `  \x1b[90m⚲ ${step.metric}\x1b[0m` : '';
+    lines.push(`  \x1b[1mQ${i + 1}.\x1b[0m [${label}]${metric}`);
+
+    if (step.grade != null || step.duration_seconds != null) {
+      const parts: string[] = [];
+      if (step.grade != null) parts.push(String(step.grade));
+      if (step.duration_seconds != null) parts.push(`${step.duration_seconds}s`);
+      lines.push(`      ${parts.join(' · ')}`);
+    }
+
+    const selected = formatSelected(step.selected);
+    if (selected) lines.push(`      answer: ${selected}`);
+
+    if (step.why) {
+      lines.push(`      why: "${step.why}"  ${formatSentiment(step.sentiment)}`);
+    } else if (step.sentiment !== undefined) {
+      // a step that explains a rating but whose why is still empty
+      lines.push(`      ${formatSentiment(step.sentiment)}`);
+    }
+  });
+
+  return lines;
+}
+
+type GroupBy = 'cohort' | 'audience_type';
+
+function groupParticipants(
+  participants: ReportParticipant[],
+  groupBy: GroupBy,
+): { label: string; items: ReportParticipant[] }[] {
+  const groups = new Map<string, ReportParticipant[]>();
+  for (const p of participants) {
+    let key: string;
+    if (groupBy === 'cohort') {
+      // cohorts is 0..n; non-enroll participants get []. Fall back to
+      // audience_type + demographics so they still cluster sensibly.
+      key = p.cohorts && p.cohorts.length
+        ? p.cohorts.map(c => c.name).join(', ')
+        : `(no cohort) ${p.audience_type ?? ''} ${participantDemoSummary(p.demographics)}`.trim();
+    } else {
+      key = p.audience_type ?? '(unknown audience)';
+    }
+    const bucket = groups.get(key);
+    if (bucket) bucket.push(p);
+    else groups.set(key, [p]);
+  }
+  return [...groups.entries()].map(([label, items]) => ({ label, items }));
 }
 
 function runStaticWalkthrough(test: TestShowResponse, screens: WalkthroughScreen[]): void {
@@ -2108,7 +2260,7 @@ export function registerTestsCommand(program: Command): void {
     .description('Get aggregated report data')
     .option(
       '--include <values>',
-      'Comma-separated: questions_summary,questions_followups,questions_responses,audiences_summary,demographics,ux_metrics,prototype_journeys,filter_options',
+      'Comma-separated: questions_summary,questions_followups,questions_responses,audiences_summary,demographics,ux_metrics,prototype_journeys,participants,filter_options',
       'questions_summary',
     )
     .option('--limit <n>', 'Limit for questions_responses')
@@ -2153,6 +2305,91 @@ export function registerTestsCommand(program: Command): void {
         const data = await client.get(`tests/${id}/report`, params);
         // Report data is complex nested JSON — always output as JSON
         printJson(data);
+      }),
+    );
+
+  cmd
+    .command('participants <id>')
+    .description("Per-respondent journeys: each person's answers stitched together in order")
+    .option('--participant <rsp_id>', 'Show only one respondent (matches participant_id)')
+    .option('--group-by <field>', 'Group respondents by: cohort or audience_type')
+    .option('--limit <n>', 'Show at most N respondents (applied client-side)')
+    .option('--offset <n>', 'Skip the first N respondents (applied client-side)')
+    .option('--age <values...>', 'Filter by age brackets')
+    .option('--gender <values...>', 'Filter by gender')
+    .option('--country <values...>', 'Filter by country')
+    .option('--state <values...>', 'Filter by state')
+    .option('--city <values...>', 'Filter by city')
+    .option('--income <values...>', 'Filter by income')
+    .option('--education <values...>', 'Filter by education')
+    .option('--company <values...>', 'Filter by company')
+    .option('--sentiment <values...>', 'Filter by sentiment')
+    .option('--segment-id <values...>', 'Filter by audience segment ID')
+    .option('--response-time <values...>', 'Filter by response time')
+    .option('--hidden <bool>', 'Filter by hidden status')
+    .option('--flagged <bool>', 'Filter by flagged status')
+    .action(
+      withErrorHandling(async (id: string, cmdOpts) => {
+        const client = makeClient(program);
+        const params: Record<string, unknown> = { include: 'participants' };
+        if (cmdOpts.age) params.age = cmdOpts.age;
+        if (cmdOpts.gender) params.gender = cmdOpts.gender;
+        if (cmdOpts.country) params.country = cmdOpts.country;
+        if (cmdOpts.state) params.state = cmdOpts.state;
+        if (cmdOpts.city) params.city = cmdOpts.city;
+        if (cmdOpts.income) params.income = cmdOpts.income;
+        if (cmdOpts.education) params.education = cmdOpts.education;
+        if (cmdOpts.company) params.company = cmdOpts.company;
+        if (cmdOpts.sentiment) params.sentiment = cmdOpts.sentiment;
+        if (cmdOpts.segmentId) params.segment_id = cmdOpts.segmentId;
+        if (cmdOpts.responseTime) params.response_time = cmdOpts.responseTime;
+        if (cmdOpts.hidden) params.hidden = cmdOpts.hidden;
+        if (cmdOpts.flagged) params.flagged = cmdOpts.flagged;
+
+        const data = (await client.get(`tests/${id}/report`, params)) as ParticipantsReportResponse;
+        let participants = data.participants ?? [];
+
+        if (cmdOpts.participant) {
+          participants = participants.filter(p => p.participant_id === cmdOpts.participant);
+        }
+        // Pagination is applied client-side over the returned array so the
+        // result is predictable regardless of server-side scoping.
+        const offset = cmdOpts.offset ? Number(cmdOpts.offset) : 0;
+        if (offset) participants = participants.slice(offset);
+        if (cmdOpts.limit) participants = participants.slice(0, Number(cmdOpts.limit));
+
+        if (isJsonMode()) {
+          printJson({ study: data.study, participants });
+          return;
+        }
+
+        if (participants.length === 0) {
+          console.log('No participants. (Report may still be processing, or filters matched nobody.)');
+          return;
+        }
+
+        const groupBy: GroupBy | undefined =
+          cmdOpts.groupBy === 'cohort' || cmdOpts.groupBy === 'audience_type'
+            ? cmdOpts.groupBy
+            : undefined;
+
+        console.log(`\n\x1b[1m${participants.length} participant${participants.length === 1 ? '' : 's'}\x1b[0m`);
+
+        if (groupBy) {
+          for (const group of groupParticipants(participants, groupBy)) {
+            console.log(`\n\x1b[36m■ ${group.label}\x1b[0m  \x1b[90m(${group.items.length})\x1b[0m`);
+            group.items.forEach((p, i) => {
+              console.log();
+              for (const line of renderParticipant(p, i + 1)) console.log(line);
+            });
+          }
+        } else {
+          participants.forEach((p, i) => {
+            console.log();
+            printSeparator();
+            for (const line of renderParticipant(p, i + 1)) console.log(line);
+          });
+        }
       }),
     );
 }
