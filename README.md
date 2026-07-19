@@ -104,6 +104,28 @@ helio-cli tests walkthrough <test-uuid> --output json   # structured screen list
 
 `preview` is a structural summary (every question on one page). `walkthrough` renders each participant screen separately — intro, then each question with its own input UI (radio buttons, text box, NPS row, etc.) — so you can comprehend the experience step by step. Asset-heavy types (prototypes, click tests, tree tests) render a placeholder pointing to the Helio browser preview.
 
+### Assets
+
+```bash
+# Upload an image (jpg, jpeg, png, gif; max 10MB)
+helio-cli assets upload ./homepage-mock.png
+
+# Find asset ids to use with --asset-id
+helio-cli assets list
+helio-cli assets list --type image --name homepage
+
+# Check processing status and get signed URLs
+helio-cli assets get <asset-id>
+
+# Attach an image as a question stimulus
+helio-cli tests add-question <test-uuid> \
+    --type free_response \
+    --instructions "What stands out on this page?" \
+    --asset-id <asset-id>
+```
+
+Uploads return immediately with `status: "processing"`; poll `assets get <asset-id>` until `status` is `complete` to get dimensions and URLs. Asset ids are numeric (unlike test/project uuids).
+
 ### Question Types
 
 `free_response`, `multiple_choice`, `likert`, `nps`, `ranking`, `preference`, `matrix`, `card_sort`, `point_allocation`, `max_diff`

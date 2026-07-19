@@ -98,6 +98,43 @@ describe('HelioClient — headers and body', () => {
   });
 });
 
+// ─── Multipart upload ────────────────────────────────────────────────────────
+
+describe('HelioClient — postMultipart', () => {
+  const makeForm = () => {
+    const form = new FormData();
+    form.append('file', new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' }), 'tiny.png');
+    return form;
+  };
+
+  it('POSTs the FormData without a JSON Content-Type so fetch can set the boundary', async () => {
+    await makeClient().postMultipart('assets', makeForm());
+    expect(calls[0].url).toBe('https://my.helio.app/api/public/assets');
+    expect(calls[0].init.method).toBe('POST');
+    expect(calls[0].init.body).toBeInstanceOf(FormData);
+    expect(calls[0].init.headers['Content-Type']).toBeUndefined();
+    expect(calls[0].init.headers).toMatchObject({
+      'X-API-ID': 'id-123',
+      'X-API-TOKEN': 'tok-456',
+      Accept: 'application/json',
+    });
+  });
+
+  it('parses the JSON response like other requests', async () => {
+    nextResponse = () => jsonResponse({ asset: { id: 138, status: 'processing' } }, 201);
+    await expect(makeClient().postMultipart('assets', makeForm())).resolves.toEqual({
+      asset: { id: 138, status: 'processing' },
+    });
+  });
+
+  it('throws HelioApiError on non-ok responses', async () => {
+    nextResponse = () => jsonResponse({ code: 422, message: 'Invalid Parameter', type: 'Invalid Parameter' }, 422);
+    const err = await makeClient().postMultipart('assets', makeForm()).catch((e: unknown) => e as HelioApiError);
+    expect(err).toBeInstanceOf(HelioApiError);
+    expect((err as HelioApiError).status).toBe(422);
+  });
+});
+
 // ─── Response handling ───────────────────────────────────────────────────────
 
 describe('HelioClient — response handling', () => {
