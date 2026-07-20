@@ -9,6 +9,7 @@ exports[`walkthroughScreenJson > serializes the full screen list to the stable J
   },
   {
     "allow_multiple": true,
+    "assets": [],
     "choices": [
       "Helpful",
       "Clear",
@@ -22,12 +23,14 @@ exports[`walkthroughScreenJson > serializes the full screen list to the stable J
     "raw_type": "MultipleChoiceDirectiveSection",
     "renderable": "full",
     "scale_type": null,
+    "site_link": null,
     "type": "multiple_choice",
     "type_label": "Multiple Choice",
     "ux_metric": null,
   },
   {
     "allow_multiple": false,
+    "assets": [],
     "choices": [
       "Not at all",
       "Slightly",
@@ -42,12 +45,23 @@ exports[`walkthroughScreenJson > serializes the full screen list to the stable J
     "raw_type": "LikertDirectiveSection",
     "renderable": "full",
     "scale_type": "comprehension",
+    "site_link": "https://example.com/landing",
     "type": "likert",
     "type_label": "Likert",
     "ux_metric": "comprehension",
   },
   {
     "allow_multiple": false,
+    "assets": [
+      {
+        "asset_id": 7,
+        "thumb_url": "https://cdn.example.com/click-thumb.png",
+        "type": "image",
+        "url": "https://cdn.example.com/click-full.png",
+        "variation_id": "v-click",
+        "variation_name": "Homepage",
+      },
+    ],
     "choices": [],
     "kind": "question",
     "position": 4,
@@ -57,12 +71,23 @@ exports[`walkthroughScreenJson > serializes the full screen list to the stable J
     "raw_type": "ClickTestDirectiveSection",
     "renderable": "placeholder",
     "scale_type": null,
+    "site_link": null,
     "type": "click_test",
     "type_label": "Click Test",
     "ux_metric": null,
   },
   {
     "allow_multiple": false,
+    "assets": [
+      {
+        "asset_id": 42,
+        "thumb_url": "https://cdn.example.com/fr-thumb.png",
+        "type": "image",
+        "url": "https://cdn.example.com/fr-full.png",
+        "variation_id": "v-fr",
+        "variation_name": "Mock",
+      },
+    ],
     "choices": [],
     "kind": "question",
     "position": 5,
@@ -72,6 +97,7 @@ exports[`walkthroughScreenJson > serializes the full screen list to the stable J
     "raw_type": "FreeResponseDirectiveSection",
     "renderable": "full",
     "scale_type": null,
+    "site_link": null,
     "type": "free_response",
     "type_label": "Free Response",
     "ux_metric": null,
