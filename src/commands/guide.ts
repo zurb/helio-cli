@@ -199,6 +199,11 @@ const GUIDE = `
   Raw response data:
     $ helio-cli tests responses <test-uuid>
 
+  Read individual respondent journeys (answer + why + sentiment per section):
+    $ helio-cli tests participants <test-uuid>
+    $ helio-cli tests participants <test-uuid> --group-by cohort
+    $ helio-cli tests participants <test-uuid> --sentiment negative --output json
+
   Available \x1b[4m--include\x1b[0m values:
     questions_summary      Aggregated results per question (default)
     questions_followups    Follow-up question summaries & sentiment
@@ -207,6 +212,7 @@ const GUIDE = `
     demographics           Age, gender, income, education distributions
     ux_metrics             UX metric scores (ease of use, etc.)
     prototype_journeys     Screen-by-screen prototype navigation data
+    participants           Per-respondent stitched journeys (answer + why + sentiment)
     filter_options         Available filter values for the test
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -328,6 +334,18 @@ const GUIDE_JSON = {
         },
         note: 'Complements preview: preview is a flat structural summary, walkthrough renders each participant screen separately (intro + per-question UI). Asset-heavy types (prototype_task, click_test, tree_test) render a placeholder pointing to the Helio browser preview. With --output json, emits { test, screens: [...] }.',
       },
+      participants: {
+        description: "Per-respondent journeys — each person's answers stitched together in order, with the follow-up why and its sentiment attached to each rating",
+        args: '<id>',
+        options: {
+          '--participant <rsp_id>': 'Show only one respondent (matches participant_id)',
+          '--group-by <field>': 'Group respondents by cohort or audience_type',
+          '--limit <n>': 'Show at most N respondents (applied client-side)',
+          '--offset <n>': 'Skip the first N respondents (applied client-side)',
+          'demographic/segment/sentiment filters': 'Same as `report` (--age, --gender, --country, --sentiment, --segment-id, --flagged, --hidden, …) — applied server-side',
+        },
+        note: 'Convenience wrapper over `report --include participants`. Where walkthrough shows the empty test structure and report shows aggregates, participants shows what real people actually answered. Text mode renders a readable transcript; --output json emits { study, participants: [...] }. Caveats: cohorts is 0..n (empty for non-enroll recruits); sentiment / prototype grade+duration are eventually consistent, so null means "not computed yet" (rendered "pending"), never neutral.',
+      },
       create: {
         description: 'Create a new test (saved as draft)',
         required: ['--name <name>', '--intro <text>', '--target-audience-size <n>'],
@@ -443,6 +461,7 @@ const GUIDE_JSON = {
           demographics: 'Age, gender, income, education distributions',
           ux_metrics: 'UX metric scores',
           prototype_journeys: 'Screen-by-screen prototype navigation data',
+          participants: 'Per-respondent stitched journeys (answer + why + sentiment per section)',
           filter_options: 'Available filter values for the test',
         },
       },
