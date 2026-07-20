@@ -233,6 +233,11 @@ interface VariationData {
   name: string;
   type: string;
   choices: ChoiceData[];
+  has_asset?: boolean;
+  asset_id?: number | string | null;
+  asset_type?: string | null;
+  asset_status?: string | null;
+  site_link?: string | null;
   [key: string]: unknown;
 }
 
@@ -863,6 +868,11 @@ export type WalkthroughScreen =
       allow_multiple: boolean;
       scale_type?: string;
       ux_metric?: string;
+      has_asset: boolean;
+      asset_id: number | string | null;
+      asset_type: string | null;
+      asset_status: string | null;
+      site_link: string | null;
       renderable: 'full' | 'placeholder';
     };
 
@@ -923,6 +933,7 @@ export function buildWalkthroughScreens(test: TestShowResponse): WalkthroughScre
     const uxMetric = (s as { ux_metric?: { metric_type?: string } }).ux_metric?.metric_type;
     const randomize = Boolean((s as { randomize_choices?: unknown }).randomize_choices);
     const allowMultiple = Boolean((s as { allow_multiple?: unknown }).allow_multiple);
+    const hasAsset = Boolean(variation?.has_asset);
 
     screens.push({
       kind: 'question',
@@ -937,6 +948,11 @@ export function buildWalkthroughScreens(test: TestShowResponse): WalkthroughScre
       allow_multiple: allowMultiple,
       scale_type: s.likert_type || undefined,
       ux_metric: uxMetric,
+      has_asset: hasAsset,
+      asset_id: hasAsset ? variation?.asset_id ?? null : null,
+      asset_type: hasAsset ? variation?.asset_type ?? null : null,
+      asset_status: hasAsset ? variation?.asset_status ?? null : null,
+      site_link: variation?.site_link ?? null,
       renderable: ASSET_HEAVY_RAW_TYPES.has(s.type) ? 'placeholder' : 'full',
     });
   }
@@ -958,6 +974,15 @@ function renderWalkthroughScreen(screen: WalkthroughScreen): string[] {
   lines.push(`  ${screen.question}`);
   if (screen.ux_metric) {
     lines.push(`  \x1b[90m⚲ UX metric: ${screen.ux_metric}\x1b[0m`);
+  }
+  if (screen.has_asset) {
+    const kind = screen.asset_type ?? 'asset';
+    const id = screen.asset_id != null ? ` (asset ${screen.asset_id})` : '';
+    const status = screen.asset_status && screen.asset_status !== 'complete' ? ` — ${screen.asset_status}` : '';
+    lines.push(`  \x1b[90m🖼  ${kind} attached${id}${status} — open in browser preview to view\x1b[0m`);
+  }
+  if (screen.site_link) {
+    lines.push(`  \x1b[90m🔗 site: ${screen.site_link}\x1b[0m`);
   }
   lines.push('');
 
@@ -1382,6 +1407,11 @@ export function walkthroughScreenJson(screen: WalkthroughScreen): Record<string,
     allow_multiple: screen.allow_multiple,
     scale_type: screen.scale_type ?? null,
     ux_metric: screen.ux_metric ?? null,
+    has_asset: screen.has_asset,
+    asset_id: screen.asset_id,
+    asset_type: screen.asset_type,
+    asset_status: screen.asset_status,
+    site_link: screen.site_link,
     renderable: screen.renderable,
   };
 }

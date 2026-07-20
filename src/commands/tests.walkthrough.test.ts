@@ -78,7 +78,17 @@ const fixture: TestShowResponse = {
       instructions: '<p>What would you improve?</p>',
       stripped_instructions: '',
       likert_type: '',
-      variations: [],
+      variations: [
+        {
+          id: 'v-fr', name: 'Variation B', type: 'FreeResponseVariation',
+          choices: [],
+          has_asset: true,
+          asset_id: 60755,
+          asset_type: 'image',
+          asset_status: 'complete',
+          site_link: null,
+        },
+      ],
     },
   ],
 };
@@ -146,6 +156,29 @@ describe('buildWalkthroughScreens', () => {
     const empty = buildWalkthroughScreens({ ...fixture, sections: [] });
     expect(empty).toEqual([{ kind: 'intro', position: 1, text: 'Welcome to our test!' }]);
   });
+
+  it('surfaces the attached asset from the variation', () => {
+    const fr = screens[4];
+    expect(fr.kind).toBe('question');
+    if (fr.kind === 'question') {
+      expect(fr.has_asset).toBe(true);
+      expect(fr.asset_id).toBe(60755);
+      expect(fr.asset_type).toBe('image');
+      expect(fr.asset_status).toBe('complete');
+      expect(fr.site_link).toBeNull();
+    }
+  });
+
+  it('reports has_asset false with null asset fields when no asset is attached', () => {
+    const mc = screens[1];
+    if (mc.kind === 'question') {
+      expect(mc.has_asset).toBe(false);
+      expect(mc.asset_id).toBeNull();
+      expect(mc.asset_type).toBeNull();
+      expect(mc.asset_status).toBeNull();
+      expect(mc.site_link).toBeNull();
+    }
+  });
 });
 
 // ─── walkthroughScreenJson (the --output json contract) ─────────────────────
@@ -170,9 +203,19 @@ describe('walkthroughScreenJson', () => {
 
   it('question screens expose the agent-facing field set', () => {
     expect(Object.keys(json[2]).sort()).toEqual([
-      'allow_multiple', 'choices', 'kind', 'position', 'q_number',
-      'question', 'randomize_choices', 'raw_type', 'renderable',
-      'scale_type', 'type', 'type_label', 'ux_metric',
+      'allow_multiple', 'asset_id', 'asset_status', 'asset_type', 'choices',
+      'has_asset', 'kind', 'position', 'q_number', 'question',
+      'randomize_choices', 'raw_type', 'renderable', 'scale_type',
+      'site_link', 'type', 'type_label', 'ux_metric',
     ]);
+  });
+
+  it('question screens carry the asset fields through to JSON', () => {
+    const fr = json[4];
+    expect(fr.has_asset).toBe(true);
+    expect(fr.asset_id).toBe(60755);
+    expect(fr.asset_type).toBe('image');
+    expect(fr.asset_status).toBe('complete');
+    expect(fr.site_link).toBeNull();
   });
 });
