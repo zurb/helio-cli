@@ -111,6 +111,28 @@ helio-cli tests participants <test-uuid> --sentiment negative --output json
 
 `participants` is the report seen one respondent at a time: where `walkthrough` shows the empty test structure and `tests report` shows aggregates, `participants` stitches each person's answers together in order — the rating, the follow-up "why", and that answer's sentiment, plus demographics, audience type, and cohorts. It accepts the same demographic/segment/sentiment filters as `report`, supports `--group-by cohort|audience_type`, and emits flat `{ study, participants: [...] }` JSON for piping into `jq`. It's a convenience wrapper over `tests report --include participants`. Note: `cohorts` is empty for non-enroll recruits, and `sentiment` / prototype grade are eventually consistent — a `null` means "not computed yet" (shown as *pending*), never neutral.
 
+### Assets
+
+```bash
+# Upload an image (jpg, jpeg, png, gif; max 10MB)
+helio-cli assets upload ./homepage-mock.png
+
+# Find asset ids to use with --asset-id
+helio-cli assets list
+helio-cli assets list --type image --name homepage
+
+# Check processing status and get signed URLs
+helio-cli assets get <asset-id>
+
+# Attach an image as a question stimulus
+helio-cli tests add-question <test-uuid> \
+    --type free_response \
+    --instructions "What stands out on this page?" \
+    --asset-id <asset-id>
+```
+
+Uploads return immediately with `status: "processing"`; poll `assets get <asset-id>` until `status` is `complete` to get dimensions and URLs. Asset ids are numeric (unlike test/project uuids).
+
 ### Question Types
 
 `free_response`, `multiple_choice`, `likert`, `nps`, `ranking`, `preference`, `matrix`, `card_sort`, `point_allocation`, `max_diff`

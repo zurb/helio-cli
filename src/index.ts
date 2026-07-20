@@ -12,6 +12,7 @@ import { registerCustomListsCommand } from './commands/custom-lists.js';
 import { registerAudiencesCommand } from './commands/audiences.js';
 import { registerInterceptsCommand } from './commands/intercepts.js';
 import { registerResponsesCommand } from './commands/responses.js';
+import { registerAssetsCommand } from './commands/assets.js';
 
 const pkg = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf-8'),
@@ -72,6 +73,7 @@ registerCustomListsCommand(program);
 registerAudiencesCommand(program);
 registerInterceptsCommand(program);
 registerResponsesCommand(program);
+registerAssetsCommand(program);
 
 program.parseAsync().catch((err: Error & { exitCode?: number }) => {
   // Commander throws on parse errors with exitOverride(); outputError already printed the message.

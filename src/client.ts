@@ -49,6 +49,10 @@ export class HelioClient {
 
     const res = await fetch(url, { ...init, signal: AbortSignal.timeout(30_000) });
 
+    return this.parseResponse(res);
+  }
+
+  private async parseResponse(res: Response): Promise<unknown> {
     if (res.status === 204 || res.headers.get('content-length') === '0') {
       if (!res.ok) throw new HelioApiError(res.status, '');
       return {};
@@ -69,6 +73,23 @@ export class HelioClient {
 
   post(path: string, body?: unknown): Promise<unknown> {
     return this.request('POST', path, { body });
+  }
+
+  // Multipart upload — fetch sets the Content-Type boundary itself, so we
+  // only send the auth headers. Longer timeout to accommodate large files.
+  async postMultipart(path: string, form: FormData): Promise<unknown> {
+    const res = await fetch(this.buildUrl(path), {
+      method: 'POST',
+      headers: {
+        'X-API-ID': this.apiId,
+        'X-API-TOKEN': this.apiToken,
+        Accept: 'application/json',
+      },
+      body: form,
+      signal: AbortSignal.timeout(120_000),
+    });
+
+    return this.parseResponse(res);
   }
 
   put(path: string, body?: unknown): Promise<unknown> {

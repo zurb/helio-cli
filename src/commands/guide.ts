@@ -42,6 +42,14 @@ const GUIDE = `
   Get test details:
     $ helio-cli tests get <test-uuid>
 
+  List and upload assets (images for question stimuli):
+    $ helio-cli assets list --type image
+    $ helio-cli assets upload ./homepage-mock.png
+    $ helio-cli assets get <asset-id>          # check processing status + URLs
+    $ helio-cli tests add-question <test-uuid> \\
+        --type free_response --instructions "What stands out?" \\
+        --asset-id <asset-id>
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 \x1b[1m3. CREATING & LAUNCHING TESTS\x1b[0m
@@ -494,6 +502,24 @@ const GUIDE_JSON = {
         description: 'Submit a response (Enterprise)',
         required: ['--test-id', '--c-id'],
         optional: ['--email', '--name', '--company', '--age', '--gender', '--education', '--income', '--country', '--state', '--city', '--zip', '--section-responses <json>'],
+      },
+    },
+    assets: {
+      list: {
+        description: 'List account assets (images, video, audio)',
+        options: {
+          '--type': 'image | video | audio',
+          '--name': 'Filter by filename (case-insensitive partial match)',
+          '--limit': 'Results per page (max 100, default 25)',
+          '--offset': 'Pagination offset',
+        },
+        note: 'Use an asset id as --asset-id on tests add-question / edit-question to attach an image stimulus.',
+      },
+      get: { description: 'Get asset details, including signed URLs', args: '<id>' },
+      upload: {
+        description: 'Upload an image asset (jpg, jpeg, png, gif; max 10MB)',
+        args: '<file>',
+        note: 'Returns the new asset with status "processing"; poll assets get <id> until status is "complete".',
       },
     },
   },

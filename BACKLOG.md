@@ -8,18 +8,16 @@ Until items here are resolved, the user-facing disclosure lives in the marketpla
 
 ---
 
-## 1. Asset upload + asset listing
+## 1. Asset upload + asset listing — RESOLVED (2026-07-19)
 
-**Status:** API gap (no `/api/public/assets` endpoints in the spec).
-**Today:** questions accept `--asset-id` / `--site-link`, but asset IDs must be fetched from the web app by hand — there isn't even a list call to find them.
-**Smallest useful step:** a read-only `GET /api/public/assets` (id, name, type, thumbnail) would unlock `helio-cli assets list` and make `--asset-id` practical without touching upload. Upload can come later.
-**Product question:** is an assets read endpoint on the Public API roadmap? Is upload deliberately excluded (abuse/size concerns)?
+**Status:** closed. The Public API added `GET /assets`, `GET /assets/:id`, and `POST /assets` (multipart image upload: jpg/jpeg/png/gif, 10MB cap), and the CLI now wraps all three as `assets list | get | upload`, with `HelioClient#postMultipart` for the upload path.
+**Remaining scope:** upload is images-only (video/audio are listable but not uploadable), and uploads return `status: "processing"` with no webhook — poll `assets get <id>` until `complete`. Asset ids are numeric, unlike test/project uuids.
 
 ## 2. Click test / tree test / prototype task creation
 
 **Status:** API gap (`POST /tests` marks these types non-creatable).
 **Today:** the three usability section types — arguably Helio's signature sections — can't be created programmatically at all. Reports for them are fully readable.
-**Dependency:** requires #1 (assets/hotspots) at minimum; prototype tasks also need Figma linkage.
+**Dependency:** #1 (assets) is now resolved, so click tests have their asset half; the remaining blocker is hotspot creation (and Figma linkage for prototype tasks).
 **Product question:** is creation UI-only *by design* (hotspot drawing is inherently visual), or is a "create with asset_id + hotspot coordinates" API plausible? If by design, we document it as permanent and stop tracking.
 
 ## 3. Branching / skip logic / conditional follow-ups
