@@ -233,6 +233,13 @@ interface VariationData {
   name: string;
   type: string;
   choices: ChoiceData[];
+  asset_id?: number | string | null;
+  has_asset?: boolean;
+  asset_type?: string | null;
+  asset_status?: string | null;
+  screenshot_url?: string | null;
+  thumb_url?: string | null;
+  site_link?: string | null;
   [key: string]: unknown;
 }
 
@@ -848,6 +855,18 @@ export function formatValidationErrors(errors: ValidationError[]): string {
 
 // ── Walkthrough (participant-eye view) ───────────────────────────────
 
+export interface WalkthroughAsset {
+  variation_id: string;
+  variation_name: string;
+  asset_id: number | string | null;
+  type: string | null;
+  // Upload pipeline state ("processing" | "complete" | …): a processing
+  // asset is attached but not yet visible to participants.
+  status: string | null;
+  url: string | null;
+  thumb_url: string | null;
+}
+
 export type WalkthroughScreen =
   | { kind: 'intro'; position: number; text: string }
   | {
@@ -863,6 +882,8 @@ export type WalkthroughScreen =
       allow_multiple: boolean;
       scale_type?: string;
       ux_metric?: string;
+      site_link?: string;
+      assets: WalkthroughAsset[];
       renderable: 'full' | 'placeholder';
     };
 
@@ -924,6 +945,18 @@ export function buildWalkthroughScreens(test: TestShowResponse): WalkthroughScre
     const randomize = Boolean((s as { randomize_choices?: unknown }).randomize_choices);
     const allowMultiple = Boolean((s as { allow_multiple?: unknown }).allow_multiple);
 
+    const assets: WalkthroughAsset[] = (s.variations ?? [])
+      .filter(v => v.has_asset || v.screenshot_url || v.thumb_url)
+      .map(v => ({
+        variation_id: v.id,
+        variation_name: v.name,
+        asset_id: v.asset_id ?? null,
+        type: v.asset_type ?? null,
+        status: v.asset_status ?? null,
+        url: v.screenshot_url ?? null,
+        thumb_url: v.thumb_url ?? null,
+      }));
+
     screens.push({
       kind: 'question',
       position: screens.length + 1,
@@ -937,6 +970,8 @@ export function buildWalkthroughScreens(test: TestShowResponse): WalkthroughScre
       allow_multiple: allowMultiple,
       scale_type: s.likert_type || undefined,
       ux_metric: uxMetric,
+      site_link: variation?.site_link || undefined,
+      assets,
       renderable: ASSET_HEAVY_RAW_TYPES.has(s.type) ? 'placeholder' : 'full',
     });
   }
@@ -945,6 +980,25 @@ export function buildWalkthroughScreens(test: TestShowResponse): WalkthroughScre
 }
 
 const LETTERS = 'abcdefghijklmnopqrstuvwxyz';
+
+function stimulusLines(screen: WalkthroughScreen): string[] {
+  if (screen.kind !== 'question') return [];
+  const lines: string[] = [];
+  for (const asset of screen.assets) {
+    const url = asset.url ?? asset.thumb_url;
+    const label = screen.assets.length > 1 ? `${asset.variation_name}: ` : '';
+    const pending = asset.status && asset.status !== 'complete' ? ` (${asset.status})` : '';
+    if (url) {
+      lines.push(`  \x1b[90m🖼  ${label}${url}${pending}\x1b[0m`);
+    } else if (pending) {
+      lines.push(`  \x1b[90m🖼  ${label}${asset.type ?? 'asset'} attached${pending} — no URL yet\x1b[0m`);
+    }
+  }
+  if (screen.site_link) {
+    lines.push(`  \x1b[90m🔗 ${screen.site_link}\x1b[0m`);
+  }
+  return lines;
+}
 
 function renderWalkthroughScreen(screen: WalkthroughScreen): string[] {
   const lines: string[] = [];
@@ -959,6 +1013,8 @@ function renderWalkthroughScreen(screen: WalkthroughScreen): string[] {
   if (screen.ux_metric) {
     lines.push(`  \x1b[90m⚲ UX metric: ${screen.ux_metric}\x1b[0m`);
   }
+  const stimuli = stimulusLines(screen);
+  if (stimuli.length) lines.push(...stimuli);
   lines.push('');
 
   if (screen.renderable === 'placeholder') {
@@ -1382,6 +1438,8 @@ export function walkthroughScreenJson(screen: WalkthroughScreen): Record<string,
     allow_multiple: screen.allow_multiple,
     scale_type: screen.scale_type ?? null,
     ux_metric: screen.ux_metric ?? null,
+    site_link: screen.site_link ?? null,
+    assets: screen.assets,
     renderable: screen.renderable,
   };
 }

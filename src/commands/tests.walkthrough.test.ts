@@ -32,6 +32,7 @@ const fixture: TestShowResponse = {
       variations: [
         {
           id: 'v-likert', name: 'V1', type: 'LikertDirectiveSection',
+          site_link: 'https://example.com/landing',
           choices: [
             choice('c1', 'Not at all', 1),
             choice('c2', 'Slightly', 2),
@@ -69,7 +70,18 @@ const fixture: TestShowResponse = {
       instructions: '<p>Click where you would go first.</p>',
       stripped_instructions: 'Click where you would go first.',
       likert_type: '',
-      variations: [],
+      variations: [
+        {
+          id: 'v-click', name: 'Homepage', type: 'ClickVariation',
+          choices: [],
+          asset_id: 7,
+          has_asset: true,
+          asset_type: 'image',
+          asset_status: 'processing',
+          screenshot_url: 'https://cdn.example.com/click-full.png',
+          thumb_url: 'https://cdn.example.com/click-thumb.png',
+        },
+      ],
     },
     {
       id: 'sec-fr',
@@ -78,7 +90,18 @@ const fixture: TestShowResponse = {
       instructions: '<p>What would you improve?</p>',
       stripped_instructions: '',
       likert_type: '',
-      variations: [],
+      variations: [
+        {
+          id: 'v-fr', name: 'Mock', type: 'FreeResponseVariation',
+          choices: [],
+          asset_id: 42,
+          has_asset: true,
+          asset_type: 'image',
+          asset_status: 'complete',
+          screenshot_url: 'https://cdn.example.com/fr-full.png',
+          thumb_url: 'https://cdn.example.com/fr-thumb.png',
+        },
+      ],
     },
   ],
 };
@@ -142,6 +165,58 @@ describe('buildWalkthroughScreens', () => {
     expect(noIntro[0].position).toBe(1);
   });
 
+  it('collects stimulus assets from variations', () => {
+    const fr = screens[4];
+    expect(fr.kind).toBe('question');
+    if (fr.kind === 'question') {
+      expect(fr.assets).toEqual([
+        {
+          variation_id: 'v-fr',
+          variation_name: 'Mock',
+          asset_id: 42,
+          type: 'image',
+          status: 'complete',
+          url: 'https://cdn.example.com/fr-full.png',
+          thumb_url: 'https://cdn.example.com/fr-thumb.png',
+        },
+      ]);
+    }
+  });
+
+  it('includes assets on placeholder screens too', () => {
+    const click = screens[3];
+    if (click.kind === 'question') {
+      expect(click.renderable).toBe('placeholder');
+      expect(click.assets).toHaveLength(1);
+      expect(click.assets[0].url).toBe('https://cdn.example.com/click-full.png');
+    }
+  });
+
+  it('carries the asset upload status so a processing stimulus is detectable', () => {
+    const click = screens[3];
+    if (click.kind === 'question') {
+      expect(click.assets[0].status).toBe('processing');
+    }
+    const mcNoAsset = screens[1];
+    if (mcNoAsset.kind === 'question') {
+      expect(mcNoAsset.assets).toEqual([]);
+    }
+  });
+
+  it('returns an empty assets array for asset-less screens', () => {
+    const mc = screens[1];
+    if (mc.kind === 'question') {
+      expect(mc.assets).toEqual([]);
+    }
+  });
+
+  it('carries site_link when the variation has one', () => {
+    const likert = screens[2];
+    if (likert.kind === 'question') {
+      expect(likert.site_link).toBe('https://example.com/landing');
+    }
+  });
+
   it('handles a test with no sections', () => {
     const empty = buildWalkthroughScreens({ ...fixture, sections: [] });
     expect(empty).toEqual([{ kind: 'intro', position: 1, text: 'Welcome to our test!' }]);
@@ -168,11 +243,19 @@ describe('walkthroughScreenJson', () => {
     expect(mc.ux_metric).toBeNull();
   });
 
+  it('question screens carry stimulus assets and null out missing site_link', () => {
+    const fr = json[4] as { assets: unknown[]; site_link: unknown };
+    expect(fr.assets).toHaveLength(1);
+    expect(fr.site_link).toBeNull();
+    const likert = json[2] as { site_link: unknown };
+    expect(likert.site_link).toBe('https://example.com/landing');
+  });
+
   it('question screens expose the agent-facing field set', () => {
     expect(Object.keys(json[2]).sort()).toEqual([
-      'allow_multiple', 'choices', 'kind', 'position', 'q_number',
+      'allow_multiple', 'assets', 'choices', 'kind', 'position', 'q_number',
       'question', 'randomize_choices', 'raw_type', 'renderable',
-      'scale_type', 'type', 'type_label', 'ux_metric',
+      'scale_type', 'site_link', 'type', 'type_label', 'ux_metric',
     ]);
   });
 });
