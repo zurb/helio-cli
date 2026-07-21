@@ -55,6 +55,7 @@ exports[`walkthroughScreenJson > serializes the full screen list to the stable J
     "assets": [
       {
         "asset_id": 7,
+        "status": "processing",
         "thumb_url": "https://cdn.example.com/click-thumb.png",
         "type": "image",
         "url": "https://cdn.example.com/click-full.png",
@@ -81,6 +82,7 @@ exports[`walkthroughScreenJson > serializes the full screen list to the stable J
     "assets": [
       {
         "asset_id": 42,
+        "status": "complete",
         "thumb_url": "https://cdn.example.com/fr-thumb.png",
         "type": "image",
         "url": "https://cdn.example.com/fr-full.png",

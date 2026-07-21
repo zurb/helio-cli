@@ -332,7 +332,7 @@ const GUIDE_JSON = {
         options: {
           '--interactive': 'Prompt one screen at a time, capture answers, print recap (TTY required). Type "back" / "quit" to navigate.',
         },
-        note: 'Complements preview: preview is a flat structural summary, walkthrough renders each participant screen separately (intro + per-question UI). Stimulus assets are shared per screen: signed image URLs print inline (🖼) and each screen carries assets: [{variation_id, variation_name, asset_id, type, url, thumb_url}] plus site_link in JSON output. Asset-heavy types (prototype_task, click_test, tree_test) still render a placeholder pointing to the Helio browser preview, but include their asset URLs. With --output json, emits { test, screens: [...] }.',
+        note: 'Complements preview: preview is a flat structural summary, walkthrough renders each participant screen separately (intro + per-question UI). Stimulus assets are shared per screen: signed image URLs print inline (🖼) and each screen carries assets: [{variation_id, variation_name, asset_id, type, status, url, thumb_url}] plus site_link in JSON output (status "processing" means the upload is attached but not yet visible to participants). Asset-heavy types (prototype_task, click_test, tree_test) still render a placeholder pointing to the Helio browser preview, but include their asset URLs. With --output json, emits { test, screens: [...] }.',
       },
       participants: {
         description: "Per-respondent journeys — each person's answers stitched together in order, with the follow-up why and its sentiment attached to each rating",

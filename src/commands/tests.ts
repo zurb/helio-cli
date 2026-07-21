@@ -236,6 +236,7 @@ interface VariationData {
   asset_id?: number | string | null;
   has_asset?: boolean;
   asset_type?: string | null;
+  asset_status?: string | null;
   screenshot_url?: string | null;
   thumb_url?: string | null;
   site_link?: string | null;
@@ -859,6 +860,9 @@ export interface WalkthroughAsset {
   variation_name: string;
   asset_id: number | string | null;
   type: string | null;
+  // Upload pipeline state ("processing" | "complete" | …): a processing
+  // asset is attached but not yet visible to participants.
+  status: string | null;
   url: string | null;
   thumb_url: string | null;
 }
@@ -948,6 +952,7 @@ export function buildWalkthroughScreens(test: TestShowResponse): WalkthroughScre
         variation_name: v.name,
         asset_id: v.asset_id ?? null,
         type: v.asset_type ?? null,
+        status: v.asset_status ?? null,
         url: v.screenshot_url ?? null,
         thumb_url: v.thumb_url ?? null,
       }));
@@ -981,9 +986,13 @@ function stimulusLines(screen: WalkthroughScreen): string[] {
   const lines: string[] = [];
   for (const asset of screen.assets) {
     const url = asset.url ?? asset.thumb_url;
-    if (!url) continue;
     const label = screen.assets.length > 1 ? `${asset.variation_name}: ` : '';
-    lines.push(`  \x1b[90m🖼  ${label}${url}\x1b[0m`);
+    const pending = asset.status && asset.status !== 'complete' ? ` (${asset.status})` : '';
+    if (url) {
+      lines.push(`  \x1b[90m🖼  ${label}${url}${pending}\x1b[0m`);
+    } else if (pending) {
+      lines.push(`  \x1b[90m🖼  ${label}${asset.type ?? 'asset'} attached${pending} — no URL yet\x1b[0m`);
+    }
   }
   if (screen.site_link) {
     lines.push(`  \x1b[90m🔗 ${screen.site_link}\x1b[0m`);

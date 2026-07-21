@@ -77,6 +77,7 @@ const fixture: TestShowResponse = {
           asset_id: 7,
           has_asset: true,
           asset_type: 'image',
+          asset_status: 'processing',
           screenshot_url: 'https://cdn.example.com/click-full.png',
           thumb_url: 'https://cdn.example.com/click-thumb.png',
         },
@@ -96,6 +97,7 @@ const fixture: TestShowResponse = {
           asset_id: 42,
           has_asset: true,
           asset_type: 'image',
+          asset_status: 'complete',
           screenshot_url: 'https://cdn.example.com/fr-full.png',
           thumb_url: 'https://cdn.example.com/fr-thumb.png',
         },
@@ -173,6 +175,7 @@ describe('buildWalkthroughScreens', () => {
           variation_name: 'Mock',
           asset_id: 42,
           type: 'image',
+          status: 'complete',
           url: 'https://cdn.example.com/fr-full.png',
           thumb_url: 'https://cdn.example.com/fr-thumb.png',
         },
@@ -186,6 +189,17 @@ describe('buildWalkthroughScreens', () => {
       expect(click.renderable).toBe('placeholder');
       expect(click.assets).toHaveLength(1);
       expect(click.assets[0].url).toBe('https://cdn.example.com/click-full.png');
+    }
+  });
+
+  it('carries the asset upload status so a processing stimulus is detectable', () => {
+    const click = screens[3];
+    if (click.kind === 'question') {
+      expect(click.assets[0].status).toBe('processing');
+    }
+    const mcNoAsset = screens[1];
+    if (mcNoAsset.kind === 'question') {
+      expect(mcNoAsset.assets).toEqual([]);
     }
   });
 
