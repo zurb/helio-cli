@@ -206,14 +206,16 @@ const QUESTION_TYPES = {
 // ── Types for preview ────────────────────────────────────────────────
 
 export interface TestShowResponse {
-  // Header fields are optional: the live tests/:id show response omits them
-  // and returns the internal numeric project_id (see resolveTestMeta).
+  // Header fields are optional: API versions before helio#4990 omit them
+  // and return the internal numeric project_id (see resolveTestMeta).
   id?: string;
   name?: string;
   status?: string;
   responses_count?: number;
   project_id?: string | number;
   project_name?: string;
+  account_id?: string;
+  account_name?: string;
   introduction: string;
   sections: SectionData[];
   [key: string]: unknown;
@@ -230,10 +232,11 @@ export interface TestMeta {
   account_name: string | null;
 }
 
-// The tests/:id show response omits most header fields and carries the
-// internal numeric project_id; the report endpoint's study object has the
-// public ULIDs plus account fields, so it backfills whatever the show
-// response lacks. Falls back to the id the user asked for.
+// Since helio#4990 the tests/:id show response carries the full header
+// (name/status/counts plus project/account ULIDs). Older API versions omit
+// most of those fields and return the internal numeric project_id, so the
+// report endpoint's study object backfills whatever the show response
+// lacks. Falls back to the id the user asked for.
 export function resolveTestMeta(
   requestedId: string,
   test: TestShowResponse,
@@ -252,8 +255,16 @@ export function resolveTestMeta(
     responses_count: test.responses_count ?? (s.total_responses as number | undefined) ?? null,
     project_id: projectId,
     project_name: test.project_name ?? (s.project_name as string | undefined) ?? null,
-    account_id: (s.account_id as string | undefined) ?? (account?.id as string | number | undefined) ?? null,
-    account_name: (s.account_name as string | undefined) ?? (account?.name as string | undefined) ?? null,
+    account_id:
+      test.account_id ??
+      (s.account_id as string | undefined) ??
+      (account?.id as string | number | undefined) ??
+      null,
+    account_name:
+      test.account_name ??
+      (s.account_name as string | undefined) ??
+      (account?.name as string | undefined) ??
+      null,
   };
 }
 
