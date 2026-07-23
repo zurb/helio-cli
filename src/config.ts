@@ -3,8 +3,8 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import type { HelioConfig } from './types.js';
 
-const CONFIG_DIR = join(homedir(), '.helio-cli');
-const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
+export const CONFIG_DIR = join(homedir(), '.helio-cli');
+export const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
 
 export function readConfig(): HelioConfig {
   try {

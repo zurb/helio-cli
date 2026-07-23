@@ -1,8 +1,6 @@
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { Command } from 'commander';
-import { getConfigValue } from '../config.js';
+import { CONFIG_FILE, getConfigValue } from '../config.js';
 import { HelioClient } from '../client.js';
 import { isJsonMode, printJson, withErrorHandling } from '../output.js';
 
@@ -20,7 +18,7 @@ export function registerDoctorCommand(program: Command): void {
       const checks: Check[] = [];
 
       // 1. Config file exists
-      const configPath = join(homedir(), '.helio-cli', 'config.json');
+      const configPath = CONFIG_FILE;
       if (existsSync(configPath)) {
         checks.push({ name: 'Config file', status: 'pass', message: configPath });
       } else {
