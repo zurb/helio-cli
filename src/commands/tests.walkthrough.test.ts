@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildWalkthroughScreens,
+  resolveTestMeta,
   walkthroughScreenJson,
   type TestShowResponse,
 } from './tests.js';
@@ -257,5 +258,87 @@ describe('walkthroughScreenJson', () => {
       'question', 'randomize_choices', 'raw_type', 'renderable',
       'scale_type', 'site_link', 'type', 'type_label', 'ux_metric',
     ]);
+  });
+});
+
+// ─── resolveTestMeta ─────────────────────────────────────────────────────────
+// The live tests/:id show response omits id/name/status/responses_count/
+// project_name and returns the internal numeric project_id, so header fields
+// are backfilled from the report endpoint's study object when available.
+
+describe('resolveTestMeta', () => {
+  const study = {
+    id: '01TESTULID',
+    name: 'Homepage V2 eval',
+    status: 'draft',
+    total_responses: 12,
+    project_id: '01PROJULID',
+    project_name: 'Homepage',
+    account_id: '01ACCTULID',
+    account_name: 'ZURB',
+  };
+
+  it('prefers show-response fields when the API provides them', () => {
+    const meta = resolveTestMeta('01REQUESTED', fixture, study);
+    expect(meta.id).toBe('test-1');
+    expect(meta.name).toBe('Homepage V2 eval');
+    expect(meta.status).toBe('draft');
+    expect(meta.responses_count).toBe(0);
+    expect(meta.project_id).toBe('proj-1');
+    expect(meta.project_name).toBe('Homepage');
+  });
+
+  it('backfills missing fields from the report study object', () => {
+    const bare = { sections: [] } as unknown as TestShowResponse;
+    const meta = resolveTestMeta('01REQUESTED', bare, study);
+    expect(meta).toEqual({
+      id: '01TESTULID',
+      name: 'Homepage V2 eval',
+      status: 'draft',
+      responses_count: 12,
+      project_id: '01PROJULID',
+      project_name: 'Homepage',
+      account_id: '01ACCTULID',
+      account_name: 'ZURB',
+    });
+  });
+
+  it('prefers the study project ULID over the internal numeric project_id', () => {
+    const bare = { project_id: 55, sections: [] } as unknown as TestShowResponse;
+    const meta = resolveTestMeta('01REQUESTED', bare, study);
+    expect(meta.project_id).toBe('01PROJULID');
+  });
+
+  it('keeps the numeric project_id when no study is available', () => {
+    const bare = { project_id: 55, sections: [] } as unknown as TestShowResponse;
+    const meta = resolveTestMeta('01REQUESTED', bare, null);
+    expect(meta.project_id).toBe(55);
+  });
+
+  it('falls back to the requested id and nulls when both sources are empty', () => {
+    const bare = { sections: [] } as unknown as TestShowResponse;
+    const meta = resolveTestMeta('01REQUESTED', bare, null);
+    expect(meta).toEqual({
+      id: '01REQUESTED',
+      name: null,
+      status: null,
+      responses_count: null,
+      project_id: null,
+      project_name: null,
+      account_id: null,
+      account_name: null,
+    });
+  });
+
+  it('takes account fields from the show-response account object when study lacks them', () => {
+    const bare = { sections: [] } as unknown as TestShowResponse;
+    const meta = resolveTestMeta('01REQUESTED', bare, null, { id: 139, name: 'ZURB' });
+    expect(meta.account_id).toBe(139);
+    expect(meta.account_name).toBe('ZURB');
+  });
+
+  it('preserves a zero responses_count from the show response', () => {
+    const meta = resolveTestMeta('01REQUESTED', fixture, study);
+    expect(meta.responses_count).toBe(0);
   });
 });

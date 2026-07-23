@@ -206,15 +206,55 @@ const QUESTION_TYPES = {
 // ── Types for preview ────────────────────────────────────────────────
 
 export interface TestShowResponse {
-  id: string;
-  name: string;
-  status: string;
-  responses_count: number;
-  project_id: string;
-  project_name: string;
+  // Header fields are optional: the live tests/:id show response omits them
+  // and returns the internal numeric project_id (see resolveTestMeta).
+  id?: string;
+  name?: string;
+  status?: string;
+  responses_count?: number;
+  project_id?: string | number;
+  project_name?: string;
   introduction: string;
   sections: SectionData[];
   [key: string]: unknown;
+}
+
+export interface TestMeta {
+  id: string;
+  name: string | null;
+  status: string | null;
+  responses_count: number | null;
+  project_id: string | number | null;
+  project_name: string | null;
+  account_id: string | number | null;
+  account_name: string | null;
+}
+
+// The tests/:id show response omits most header fields and carries the
+// internal numeric project_id; the report endpoint's study object has the
+// public ULIDs plus account fields, so it backfills whatever the show
+// response lacks. Falls back to the id the user asked for.
+export function resolveTestMeta(
+  requestedId: string,
+  test: TestShowResponse,
+  study?: Record<string, unknown> | null,
+  account?: { id?: unknown; name?: unknown } | null,
+): TestMeta {
+  const s = study ?? {};
+  const projectId =
+    typeof test.project_id === 'string'
+      ? test.project_id
+      : ((s.project_id as string | undefined) ?? test.project_id ?? null);
+  return {
+    id: test.id ?? (s.id as string | undefined) ?? requestedId,
+    name: test.name ?? (s.name as string | undefined) ?? null,
+    status: test.status ?? (s.status as string | undefined) ?? null,
+    responses_count: test.responses_count ?? (s.total_responses as number | undefined) ?? null,
+    project_id: projectId,
+    project_name: test.project_name ?? (s.project_name as string | undefined) ?? null,
+    account_id: (s.account_id as string | undefined) ?? (account?.id as string | number | undefined) ?? null,
+    account_name: (s.account_name as string | undefined) ?? (account?.name as string | undefined) ?? null,
+  };
 }
 
 interface SectionData {
@@ -1212,11 +1252,15 @@ function walkthroughHeader(screen: WalkthroughScreen, total: number, totalQuesti
   return `${left} · Q${screen.q_number} of ${totalQuestions} · ${screen.type_label}`;
 }
 
-function printWalkthroughHeader(test: TestShowResponse, totalQuestions: number): void {
-  const status = formatStatus(String(test.status ?? 'unknown'));
-  const responses = test.responses_count ?? 0;
-  console.log(`\n\x1b[1m${test.name}\x1b[0m  ${status} — ${totalQuestions} question${totalQuestions === 1 ? '' : 's'}, ${responses} response${responses === 1 ? '' : 's'}`);
-  if (test.project_name) console.log(`Project: ${test.project_name}`);
+function printWalkthroughHeader(meta: TestMeta, totalQuestions: number): void {
+  const title = meta.name ?? meta.id;
+  const status = meta.status ? `  ${formatStatus(String(meta.status))}` : '';
+  const responses = meta.responses_count ?? 0;
+  console.log(`\n\x1b[1m${title}\x1b[0m${status} — ${totalQuestions} question${totalQuestions === 1 ? '' : 's'}, ${responses} response${responses === 1 ? '' : 's'}`);
+  if (meta.project_name) {
+    const account = meta.account_name ? ` · ${meta.account_name}` : '';
+    console.log(`Project: ${meta.project_name}${account}`);
+  }
   console.log();
 }
 
@@ -1343,9 +1387,9 @@ function groupParticipants(
   return [...groups.entries()].map(([label, items]) => ({ label, items }));
 }
 
-function runStaticWalkthrough(test: TestShowResponse, screens: WalkthroughScreen[]): void {
+function runStaticWalkthrough(meta: TestMeta, screens: WalkthroughScreen[]): void {
   const totalQuestions = screens.filter(s => s.kind === 'question').length;
-  printWalkthroughHeader(test, totalQuestions);
+  printWalkthroughHeader(meta, totalQuestions);
 
   if (screens.length === 0) {
     console.log('  (no screens — test has no introduction and no questions)');
@@ -1440,12 +1484,12 @@ function interpretAnswer(screen: WalkthroughScreen, raw: string): { ok: true; di
   }
 }
 
-async function runInteractiveWalkthrough(test: TestShowResponse, screens: WalkthroughScreen[]): Promise<void> {
+async function runInteractiveWalkthrough(meta: TestMeta, screens: WalkthroughScreen[]): Promise<void> {
   const totalQuestions = screens.filter(s => s.kind === 'question').length;
   const answers = new Map<number, string>();
 
   if (screens.length === 0) {
-    printWalkthroughHeader(test, totalQuestions);
+    printWalkthroughHeader(meta, totalQuestions);
     console.log('  (no screens — test has no introduction and no questions)');
     console.log();
     return;
@@ -1457,7 +1501,7 @@ async function runInteractiveWalkthrough(test: TestShowResponse, screens: Walkth
     while (i < screens.length) {
       const screen = screens[i];
       output.write('\x1b[2J\x1b[H');
-      printWalkthroughHeader(test, totalQuestions);
+      printWalkthroughHeader(meta, totalQuestions);
       printSeparator();
       console.log(` \x1b[1m${walkthroughHeader(screen, screens.length, totalQuestions)}\x1b[0m`);
       printSeparator();
@@ -1714,11 +1758,17 @@ export function registerTestsCommand(program: Command): void {
     .action(
       withErrorHandling(async (id: string) => {
         const client = makeClient(program);
-        const data = (await client.get(`tests/${id}`)) as { test: Record<string, unknown> };
+        const data = (await client.get(`tests/${id}`)) as {
+          test: Record<string, unknown>;
+          account?: { id?: unknown; name?: unknown };
+        };
         if (isJsonMode()) {
           printJson(data);
         } else {
-          printKeyValue(data.test);
+          const merged = data.account
+            ? { account_id: data.account.id, account_name: data.account.name, ...data.test }
+            : data.test;
+          printKeyValue(merged);
         }
       }),
     );
@@ -1769,7 +1819,7 @@ export function registerTestsCommand(program: Command): void {
             blocks: blocks.map(b => ({ key: b.key, label: b.label, position: b.position })),
           });
         } else {
-          console.log(`\x1b[1m${data.test.name}\x1b[0m — current order:\n`);
+          console.log(`\x1b[1m${data.test.name ?? id}\x1b[0m — current order:\n`);
           for (let i = 0; i < blocks.length; i++) {
             console.log(`  ${i + 1}. ${blocks[i].key}`);
             console.log(`     ${blocks[i].label}`);
@@ -1789,7 +1839,7 @@ export function registerTestsCommand(program: Command): void {
 
         // Fetch test structure and report data in parallel
         const [testData, reportData] = await Promise.all([
-          client.get(`tests/${id}`) as Promise<{ test: TestShowResponse }>,
+          client.get(`tests/${id}`) as Promise<{ test: TestShowResponse; account?: { id?: number; name?: string } }>,
           client.get(`tests/${id}/report`, { include: 'questions_summary' }).catch(err => {
             if (err instanceof HelioApiError && err.status === 404) return null;
             throw err;
@@ -1797,17 +1847,13 @@ export function registerTestsCommand(program: Command): void {
         ]);
 
         const test = testData.test;
+        const meta = resolveTestMeta(id, test, reportData?.study, testData.account);
 
         if (isJsonMode()) {
           printJson({
             test: {
-              id: test.id,
-              name: test.name,
-              status: test.status,
-              responses_count: test.responses_count,
-              project_id: test.project_id,
-              project_name: test.project_name,
-              introduction: test.introduction,
+              ...meta,
+              introduction: test.introduction ?? null,
             },
             questions: reportData?.questions_summary ?? buildQuestionsFromSections(test.sections),
           });
@@ -1815,12 +1861,14 @@ export function registerTestsCommand(program: Command): void {
         }
 
         // Header
-        const status = formatStatus(String(test.status ?? 'unknown'));
-        console.log(`\n\x1b[1m${test.name}\x1b[0m  ${status}`);
-        if (test.project_name) {
-          console.log(`Project: ${test.project_name}`);
+        const title = meta.name ?? meta.id;
+        const status = meta.status ? `  ${formatStatus(String(meta.status))}` : '';
+        console.log(`\n\x1b[1m${title}\x1b[0m${status}`);
+        if (meta.project_name) {
+          const account = meta.account_name ? ` · ${meta.account_name}` : '';
+          console.log(`Project: ${meta.project_name}${account}`);
         }
-        const responseCount = test.responses_count ?? 0;
+        const responseCount = meta.responses_count ?? 0;
         console.log(`Responses: ${responseCount}`);
         if (test.introduction) {
           console.log(`Intro: ${test.introduction}`);
@@ -1847,28 +1895,31 @@ export function registerTestsCommand(program: Command): void {
     .action(
       withErrorHandling(async (id: string, cmdOpts: { interactive?: boolean }) => {
         const client = makeClient(program);
-        const { test } = (await client.get(`tests/${id}`)) as { test: TestShowResponse };
+        // The show response lacks name/status/etc — fetch the report in
+        // parallel to backfill the header (see resolveTestMeta).
+        const [showData, reportData] = await Promise.all([
+          client.get(`tests/${id}`) as Promise<{ test: TestShowResponse; account?: { id?: number; name?: string } }>,
+          client.get(`tests/${id}/report`).catch(err => {
+            if (err instanceof HelioApiError && err.status === 404) return null;
+            throw err;
+          }) as Promise<{ study?: Record<string, unknown> } | null>,
+        ]);
+        const test = showData.test;
+        const meta = resolveTestMeta(id, test, reportData?.study, showData.account);
         const screens = buildWalkthroughScreens(test);
 
         if (isJsonMode()) {
           printJson({
-            test: {
-              id: test.id,
-              name: test.name,
-              status: test.status,
-              responses_count: test.responses_count,
-              project_id: test.project_id,
-              project_name: test.project_name,
-            },
+            test: meta,
             screens: screens.map(walkthroughScreenJson),
           });
           return;
         }
 
         if (cmdOpts.interactive) {
-          await runInteractiveWalkthrough(test, screens);
+          await runInteractiveWalkthrough(meta, screens);
         } else {
-          runStaticWalkthrough(test, screens);
+          runStaticWalkthrough(meta, screens);
         }
       }),
     );
@@ -2258,21 +2309,25 @@ export function registerTestsCommand(program: Command): void {
       '--metrics-json <json>',
       'UX metrics as a JSON array or @path/to/file.json (object form: per-metric context, per-section instructions/assets/followups)',
     )
+    .option('--ux-metrics <types...>', 'Alias for --metrics (matches tests create)')
+    .option('--ux-metrics-json <json>', 'Alias for --metrics-json (matches tests create)')
     .option('--position <n>', 'Insert the metric block at this 1-based position (appends if omitted)')
     .action(
       withErrorHandling(async (id: string, cmdOpts) => {
-        if (cmdOpts.metrics && cmdOpts.metricsJson) {
+        const metricsFlag = cmdOpts.metrics ?? cmdOpts.uxMetrics;
+        const metricsJsonFlag = cmdOpts.metricsJson ?? cmdOpts.uxMetricsJson;
+        if (metricsFlag && metricsJsonFlag) {
           throw new Error('Use either --metrics or --metrics-json, not both.');
         }
-        if (!cmdOpts.metrics && !cmdOpts.metricsJson) {
+        if (!metricsFlag && !metricsJsonFlag) {
           throw new Error('Provide --metrics or --metrics-json.');
         }
 
         let metrics: UxMetricEntry[];
-        if (cmdOpts.metricsJson) {
-          metrics = parseJsonArrayFlag(cmdOpts.metricsJson, '--metrics-json') as UxMetricEntry[];
+        if (metricsJsonFlag) {
+          metrics = parseJsonArrayFlag(metricsJsonFlag, '--metrics-json') as UxMetricEntry[];
         } else {
-          metrics = cmdOpts.metrics;
+          metrics = metricsFlag;
         }
 
         const errors = validateUxMetrics(metrics);
@@ -2308,10 +2363,14 @@ export function registerTestsCommand(program: Command): void {
   cmd
     .command('remove-ux-metrics <id>')
     .description('Remove UX metrics from an existing draft test')
-    .requiredOption('--metrics <types...>', 'UX metric types to remove')
+    .option('--metrics <types...>', 'UX metric types to remove')
+    .option('--ux-metrics <types...>', 'Alias for --metrics (matches tests create)')
     .action(
       withErrorHandling(async (id: string, cmdOpts) => {
-        const metrics: string[] = cmdOpts.metrics;
+        const metrics: string[] | undefined = cmdOpts.metrics ?? cmdOpts.uxMetrics;
+        if (!metrics) {
+          throw new Error('Provide --metrics (or --ux-metrics).');
+        }
 
         // Basic validation — just check entries are strings
         const errors: ValidationError[] = [];
