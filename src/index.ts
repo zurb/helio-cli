@@ -78,13 +78,14 @@ registerInterceptsCommand(program);
 registerResponsesCommand(program);
 registerAssetsCommand(program);
 
-// Skip the startup check when running `update` itself — it does its own check.
-const finishUpdateCheck =
-  process.argv[2] === 'update' ? async () => {} : startUpdateCheck(pkg.version);
+const finishUpdateCheck = startUpdateCheck(pkg.version);
 
 program
   .parseAsync()
-  .then(() => finishUpdateCheck())
+  .then(() => {
+    // The update command reports version status itself — no notice after it.
+    if (program.args[0] !== 'update') finishUpdateCheck();
+  })
   .catch((err: Error & { exitCode?: number }) => {
     // Commander throws on parse errors with exitOverride(); outputError already printed the message.
     process.exit(err.exitCode ?? 1);

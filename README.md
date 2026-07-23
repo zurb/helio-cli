@@ -22,7 +22,7 @@ The CLI checks the npm registry for new versions at most once a day and prints a
 helio-cli update
 ```
 
-`helio-cli update --check` reports whether a newer version exists without installing. Set `HELIO_NO_UPDATE_CHECK=1` to disable the background check entirely.
+`helio-cli update --check` reports whether a newer version exists without installing. If the CLI was installed with pnpm, Yarn, Volta, or run via npx, `update` prints the matching command instead of using npm. Set `HELIO_NO_UPDATE_CHECK=1` to disable the background check entirely.
 
 ## Authentication
 
