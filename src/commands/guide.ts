@@ -139,13 +139,20 @@ const GUIDE = `
         --target-audience-size 50 \\
         --ux-metrics sentiment appeal usefulness
 
-  Edit UX metric section instructions or assets (safe fields only):
+  Edit UX metric section safe fields (instructions, assets, choice text, randomize, follow-ups):
     $ helio-cli tests edit-question <test-uuid> <section-uuid> \\
         --instructions "What impressions does the new design give you?"
     $ helio-cli tests edit-question <test-uuid> <section-uuid> \\
         --site-link "https://helio.app/dashboard"
     $ helio-cli tests edit-question <test-uuid> <section-uuid> \\
-        --choices "Sign up" "Browse pricing" "Leave site" "Contact sales"  # intent only
+        --choices "Sign up" "Browse pricing" "Leave site" "Contact sales"  # count must match (intent may resize to >= 3)
+    $ helio-cli tests edit-question <test-uuid> <section-uuid> \\
+        --followup "Why did you choose that?" --followup-required
+
+  Attach a follow-up when adding a question:
+    $ helio-cli tests add-question <test-uuid> --type multiple_choice \\
+        --instructions "Pick one" --choices "A" "B" "C" \\
+        --followup "Why?" --followup-for-choices 0 2
 
   Available UX metric types:
     sentiment, feeling, appeal, reaction, comprehension, frequency,
@@ -153,6 +160,8 @@ const GUIDE = `
 
   Add or remove UX metrics on an existing draft:
     $ helio-cli tests add-ux-metrics <test-uuid> --metrics comprehension loyalty
+    $ helio-cli tests add-ux-metrics <test-uuid> --position 2 \\
+        --metrics-json '[{"type":"sentiment","context":"the checkout flow"}]'
     $ helio-cli tests remove-ux-metrics <test-uuid> --metrics comprehension
 
   View current question/metric order:
@@ -349,12 +358,13 @@ const GUIDE_JSON = {
       create: {
         description: 'Create a new test (saved as draft)',
         required: ['--name <name>', '--intro <text>', '--target-audience-size <n>'],
-        one_of_required: ['--questions <json>', '--ux-metrics <types...>'],
+        one_of_required: ['--questions <json>', '--ux-metrics <types...>', '--ux-metrics-json <json>'],
         project: 'Provide either --project-id <uuid> or --project-name <name> (resolved to UUID)',
-        optional: ['--audience-type <type> (default: open)', '--audiences <ids...>', '--ux-metrics <types...>', '--ux-metric-context <text>', '--dry-run'],
+        optional: ['--audience-type <type> (default: open)', '--audiences <ids...>', '--ux-metrics <types...>', '--ux-metrics-json <json>', '--ux-metric-context <text>', '--dry-run'],
         dry_run: 'Validates questions and ux-metrics locally and shows estimated answer spend without creating the test.',
         questions_format: 'JSON array or @path/to/file.json',
         ux_metrics_note: 'Auto-generates standardized measurement questions. Can be used with or without --questions.',
+        ux_metrics_json_note: 'Object form of --ux-metrics (mutually exclusive with it): \'[{"type":"sentiment","context":"the checkout flow","sections":[{"instructions":"...","asset_id":"...","site_link":"...","followup":{"question":"Why?","required":true,"for_choices":[0,1]}}]}]\'. Per-metric context overrides --ux-metric-context; section overrides apply in template order.',
         ux_metric_context_note: 'Replaces generic nouns (e.g. "this page", "this product") in auto-generated instructions with your context string.',
         validation: 'Client-side validation runs automatically. Errors return {valid: false, errors: [...]} with exit code 0.',
       },
@@ -365,7 +375,11 @@ const GUIDE_JSON = {
       'add-ux-metrics': {
         description: 'Add UX metrics to an existing draft test',
         args: '<test-id>',
-        required: ['--metrics <types...>'],
+        one_of_required: ['--metrics <types...>', '--metrics-json <json>'],
+        options: {
+          '--metrics-json <json>': 'Object form (JSON array or @path/to/file.json) with per-metric context and per-section instructions/asset_id/site_link/followup overrides',
+          '--position <n>': 'Insert the metric block at this 1-based position (appends if omitted)',
+        },
       },
       'remove-ux-metrics': {
         description: 'Remove UX metrics from an existing draft test',
@@ -387,6 +401,12 @@ const GUIDE_JSON = {
         description: 'Add a question to an existing draft test (one at a time)',
         args: '<test-id>',
         required: ['--type <type>', '--instructions <text>'],
+        options: {
+          '--position <n>': 'Insert at this 1-based position (appends if omitted; later questions shift down)',
+          '--followup <text>': 'Attach a follow-up question',
+          '--followup-required': 'Mark the follow-up as required (needs --followup)',
+          '--followup-for-choices <positions...>': '0-based choice positions that trigger the follow-up (multiple choice / likert only; needs --followup)',
+        },
         type_specific: {
           multiple_choice: ['--choices <items...> (min 2)', '--allow-multiple', '--randomize-choices'],
           likert: ['--scale-type <scale>', '--custom-choices <items...> (when scale-type=custom)'],
@@ -402,7 +422,7 @@ const GUIDE_JSON = {
         note: 'Validates the question before sending. Easier than building a full JSON array.',
       },
       'edit-question': {
-        description: 'Replace a question on a draft test (keeps same position), or update safe fields on a UX metric section',
+        description: 'Replace a question on a draft test (keeps same position), or edit safe fields on a UX metric section',
         args: '<test-id> <section-id>',
         modes: {
           regular_question: {
@@ -411,9 +431,15 @@ const GUIDE_JSON = {
           },
           ux_metric_section: {
             description: 'Safe edit on a UX metric section (omit --type)',
-            allowed: ['--instructions <text>', '--asset-id <id>', '--site-link <url>', '--choices <items...> (intent only, min 3)'],
-            note: 'Structural flags (--scale-type, --categories, --points, etc.) are rejected.',
+            allowed: ['--instructions <text>', '--asset-id <id>', '--site-link <url>', '--choices <items...> (choice text on multiple choice / likert sections; count must match — intent may resize down to 3)', '--randomize-choices / --no-randomize-choices', '--followup <text> (+ --followup-required / --followup-for-choices)', '--remove-followup'],
+            note: 'Structural flags (--scale-type, --categories, --points, etc.) are rejected. NPS choices (the 0-10 scale) are locked.',
           },
+        },
+        followup_options: {
+          '--followup <text>': 'Set or replace the follow-up question',
+          '--followup-required': 'Mark the follow-up as required (needs --followup)',
+          '--followup-for-choices <positions...>': '0-based choice positions that trigger the follow-up (multiple choice / likert only; needs --followup)',
+          '--remove-followup': 'Remove the existing follow-up (cannot combine with the other followup flags)',
         },
         type_specific: {
           multiple_choice: ['--choices <items...> (min 2)', '--allow-multiple', '--randomize-choices'],

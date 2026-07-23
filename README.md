@@ -168,8 +168,13 @@ helio-cli tests create \
     --target-audience-size 50 \
     --ux-metrics sentiment appeal usefulness
 
+# Object form: per-metric context and per-section overrides (instructions, assets, follow-ups)
+helio-cli tests create ... \
+    --ux-metrics-json '[{"type":"sentiment","context":"the checkout flow","sections":[{"followup":{"question":"Why?","required":true}}]}]'
+
 # Add/remove metrics on existing drafts
 helio-cli tests add-ux-metrics <test-uuid> --metrics comprehension loyalty
+helio-cli tests add-ux-metrics <test-uuid> --position 2 --metrics-json '[{"type":"sentiment","context":"the checkout flow"}]'
 helio-cli tests remove-ux-metrics <test-uuid> --metrics comprehension
 
 # View available metric types
@@ -227,6 +232,19 @@ helio-cli custom-lists add-participants <list-uuid> \
 # Edit a question on a draft
 helio-cli tests edit-question <test-uuid> <section-uuid> \
     --type free_response --instructions "Updated question"
+
+# Insert a question at a specific position, with a follow-up
+helio-cli tests add-question <test-uuid> \
+    --type multiple_choice --instructions "Pick one" --choices "A" "B" "C" \
+    --position 2 --followup "Why?" --followup-for-choices 0 2
+
+# Safe edits on UX metric sections (omit --type): instructions, assets,
+# choice text (count must match the template; intent may resize down to 3),
+# randomize, follow-ups
+helio-cli tests edit-question <test-uuid> <metric-section-uuid> \
+    --choices "Sign up" "Browse pricing" "Leave site" \
+    --followup "What drove your answer?"
+helio-cli tests edit-question <test-uuid> <metric-section-uuid> --remove-followup
 
 # Remove a question
 helio-cli tests remove-question <test-uuid> <section-uuid>

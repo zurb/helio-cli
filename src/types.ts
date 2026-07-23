@@ -1,3 +1,11 @@
+export interface FollowupInput {
+  question?: string;
+  required?: boolean;
+  remove?: boolean;
+  for_choices?: number[];
+  [key: string]: unknown;
+}
+
 export interface HelioConfig {
   'api-id'?: string;
   'api-token'?: string;
