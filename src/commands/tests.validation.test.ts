@@ -4,6 +4,9 @@ import {
   validateUxMetrics,
   formatValidationErrors,
   parsePositiveInt,
+  parseJsonArrayFlag,
+  buildFollowupFromFlags,
+  assertFollowupChoicesInRange,
   type ValidationError,
 } from './tests.js';
 
@@ -214,6 +217,122 @@ describe('validateUxMetrics', () => {
 
   it('rejects non-string entries', () => {
     expect(validateUxMetrics([42])[0].message).toMatch(/must be a string/);
+  });
+});
+
+// ─── validateUxMetrics: object form ──────────────────────────────────────────
+
+describe('validateUxMetrics — object form', () => {
+  it('accepts an object entry with a valid type', () => {
+    expect(validateUxMetrics([{ type: 'sentiment', context: 'the dashboard' }])).toEqual([]);
+  });
+
+  it('accepts a mix of strings and objects', () => {
+    expect(validateUxMetrics(['loyalty', { type: 'sentiment', sections: [{ instructions: 'Rate it' }] }])).toEqual([]);
+  });
+
+  it('rejects an object without a type', () => {
+    const errors = validateUxMetrics([{ context: 'no type here' }]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0].message).toMatch(/string or an object with a "type"/);
+  });
+
+  it.each([null, 42, ''])('rejects entry %j', entry => {
+    const errors = validateUxMetrics([entry]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0].message).toMatch(/string or an object with a "type"/);
+  });
+
+  it('rejects an unknown type inside an object', () => {
+    const errors = validateUxMetrics([{ type: 'delight' }]);
+    expect(errors[0].message).toMatch(/Unknown metric type "delight"/);
+  });
+
+  it('detects duplicates across string and object entries', () => {
+    const errors = validateUxMetrics(['sentiment', { type: 'sentiment' }]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0].message).toMatch(/Duplicate metric type "sentiment"/);
+    expect(errors[0].field).toBe('ux_metrics[1]');
+  });
+
+  it('does not report duplicates for repeated invalid entries', () => {
+    const errors = validateUxMetrics([{}, {}]);
+    expect(errors).toHaveLength(2);
+    expect(errors.every(e => /string or an object/.test(e.message))).toBe(true);
+  });
+});
+
+// ─── parseJsonArrayFlag ──────────────────────────────────────────────────────
+
+describe('parseJsonArrayFlag', () => {
+  it('parses an inline JSON array', () => {
+    expect(parseJsonArrayFlag('[{"type":"sentiment"}]', '--ux-metrics-json')).toEqual([{ type: 'sentiment' }]);
+  });
+
+  it('rejects non-array JSON with the flag name in the message', () => {
+    expect(() => parseJsonArrayFlag('{"type":"sentiment"}', '--ux-metrics-json'))
+      .toThrow(/--ux-metrics-json must be a JSON array/);
+  });
+
+  it('prefixes parse errors with the flag name and keeps the original message', () => {
+    expect(() => parseJsonArrayFlag('not json', '--metrics-json')).toThrow(/^--metrics-json: /);
+  });
+});
+
+// ─── buildFollowupFromFlags ──────────────────────────────────────────────────
+
+describe('buildFollowupFromFlags', () => {
+  it('returns undefined when no followup flags are given', () => {
+    expect(buildFollowupFromFlags({})).toBeUndefined();
+  });
+
+  it('builds a followup from --followup alone', () => {
+    expect(buildFollowupFromFlags({ followup: 'Why?' })).toEqual({ question: 'Why?' });
+  });
+
+  it('carries required and for_choices', () => {
+    expect(
+      buildFollowupFromFlags({ followup: 'Why?', followupRequired: true, followupForChoices: ['0', '2'] }),
+    ).toEqual({ question: 'Why?', required: true, for_choices: [0, 2] });
+  });
+
+  it.each([
+    { followupRequired: true },
+    { followupForChoices: ['0'] },
+  ])('throws when %j is given without --followup', opts => {
+    expect(() => buildFollowupFromFlags(opts)).toThrow(/require --followup/);
+  });
+
+  it.each(['-1', '1.5', 'abc'])('rejects invalid for-choices position %s', p => {
+    expect(() => buildFollowupFromFlags({ followup: 'Why?', followupForChoices: [p] }))
+      .toThrow(/non-negative integers/);
+  });
+});
+
+// ─── assertFollowupChoicesInRange ────────────────────────────────────────────
+
+describe('assertFollowupChoicesInRange', () => {
+  it('passes when positions are within the choice list', () => {
+    expect(() =>
+      assertFollowupChoicesInRange({ question: 'Why?', for_choices: [0, 2] }, ['a', 'b', 'c']),
+    ).not.toThrow();
+  });
+
+  it('throws when a position is out of range', () => {
+    expect(() =>
+      assertFollowupChoicesInRange({ question: 'Why?', for_choices: [3] }, ['a', 'b', 'c']),
+    ).toThrow(/out of range for 3 choices: 3/);
+  });
+
+  it('skips the check when choices are not supplied client-side (e.g. likert)', () => {
+    expect(() =>
+      assertFollowupChoicesInRange({ question: 'Why?', for_choices: [9] }, undefined),
+    ).not.toThrow();
+  });
+
+  it('skips the check when there is no followup or no for_choices', () => {
+    expect(() => assertFollowupChoicesInRange(undefined, ['a'])).not.toThrow();
+    expect(() => assertFollowupChoicesInRange({ question: 'Why?' }, ['a'])).not.toThrow();
   });
 });
 

@@ -5,7 +5,7 @@ import { resolveCredentials } from '../config.js';
 import { HelioClient } from '../client.js';
 import { isJsonMode, printJson, printTable, printKeyValue, withErrorHandling, parseJsonOrFile } from '../output.js';
 import { HelioApiError } from '../types.js';
-import type { GlobalOptions } from '../types.js';
+import type { GlobalOptions, FollowupInput } from '../types.js';
 
 function makeClient(program: Command): HelioClient {
   const opts = program.opts<GlobalOptions>();
@@ -433,6 +433,22 @@ function buildQuestionsFromSections(sections: SectionData[] | undefined): unknow
     }));
 }
 
+// Parses a JSON array from an inline string or @path/to/file.json, prefixing
+// parseJsonOrFile's specific error (invalid JSON, file not found, etc.) with the
+// flag name so the original message reaches the user instead of being swallowed.
+export function parseJsonArrayFlag(value: string, flagName: string): unknown[] {
+  let parsed: unknown;
+  try {
+    parsed = parseJsonOrFile(value);
+  } catch (err) {
+    throw new Error(`${flagName}: ${(err as Error).message}`);
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error(`${flagName} must be a JSON array.`);
+  }
+  return parsed;
+}
+
 export function parsePositiveInt(value: string | undefined, flagName: string): number {
   if (value === undefined || value === '') {
     throw new Error(`${flagName} is required`);
@@ -486,8 +502,28 @@ interface QuestionInput {
   points_label?: string;
   random_category_order?: boolean;
   can_skip_cards?: boolean;
+  position?: number;
+  followup?: FollowupInput;
   [key: string]: unknown;
 }
+
+// UX metric object form: {type, context, sections: [{instructions, asset_id, site_link, followup}]}
+interface UxMetricSectionOverride {
+  instructions?: string;
+  asset_id?: string;
+  site_link?: string;
+  followup?: FollowupInput;
+  [key: string]: unknown;
+}
+
+export interface UxMetricObjectInput {
+  type: string;
+  context?: string;
+  sections?: UxMetricSectionOverride[];
+  [key: string]: unknown;
+}
+
+export type UxMetricEntry = string | UxMetricObjectInput;
 
 export interface ValidationError {
   question: number;
@@ -598,10 +634,19 @@ export function validateUxMetrics(metrics: unknown): ValidationError[] {
     return errors;
   }
 
+  const types: (string | undefined)[] = [];
+
   for (let i = 0; i < metrics.length; i++) {
-    const m = metrics[i];
-    if (typeof m !== 'string') {
-      errors.push({ question: 0, field: `ux_metrics[${i}]`, message: 'Each entry must be a string' });
+    const entry = metrics[i];
+    const m: unknown = typeof entry === 'string' ? entry : (entry as { type?: unknown } | null)?.type;
+    types.push(typeof m === 'string' ? m : undefined);
+
+    if (typeof m !== 'string' || !m) {
+      errors.push({
+        question: 0,
+        field: `ux_metrics[${i}]`,
+        message: 'Each entry must be a string or an object with a "type"',
+      });
       continue;
     }
 
@@ -621,8 +666,9 @@ export function validateUxMetrics(metrics: unknown): ValidationError[] {
   }
 
   const seen = new Set<string>();
-  for (let i = 0; i < metrics.length; i++) {
-    const m = metrics[i] as string;
+  for (let i = 0; i < types.length; i++) {
+    const m = types[i];
+    if (!m) continue;
     if (seen.has(m)) {
       errors.push({ question: 0, field: `ux_metrics[${i}]`, message: `Duplicate metric type "${m}"` });
     }
@@ -841,6 +887,51 @@ export function validateQuestions(questions: unknown): ValidationError[] {
   }
 
   return errors;
+}
+
+function parseFollowupForChoices(items: string[] | undefined): number[] | undefined {
+  if (!items) return undefined;
+  return items.map(p => {
+    const n = Number(p);
+    if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) {
+      throw new Error(`--followup-for-choices must be non-negative integers, got "${p}"`);
+    }
+    return n;
+  });
+}
+
+interface FollowupFlagOpts {
+  followup?: string;
+  followupRequired?: boolean;
+  followupForChoices?: string[];
+}
+
+export function buildFollowupFromFlags(cmdOpts: FollowupFlagOpts): FollowupInput | undefined {
+  if (!cmdOpts.followup) {
+    if (cmdOpts.followupRequired || cmdOpts.followupForChoices) {
+      throw new Error('The --followup-required and --followup-for-choices flags require --followup.');
+    }
+    return undefined;
+  }
+  const followup: FollowupInput = { question: cmdOpts.followup };
+  if (cmdOpts.followupRequired) followup.required = true;
+  const forChoices = parseFollowupForChoices(cmdOpts.followupForChoices);
+  if (forChoices) followup.for_choices = forChoices;
+  return followup;
+}
+
+// Bounds-check --followup-for-choices against the question's own choices when
+// they're known client-side (Likert scales resolve server-side, so skip those).
+export function assertFollowupChoicesInRange(followup: FollowupInput | undefined, choices: unknown): void {
+  if (!followup?.for_choices || !Array.isArray(choices)) return;
+  // parseFollowupForChoices already guarantees non-negative integers on the
+  // flag path; re-check here so the helper stays safe for any future caller.
+  const outOfRange = followup.for_choices.filter(p => !Number.isInteger(p) || p < 0 || p >= choices.length);
+  if (outOfRange.length > 0) {
+    throw new Error(
+      `--followup-for-choices positions out of range for ${choices.length} choices: ${outOfRange.join(', ')}`,
+    );
+  }
 }
 
 export function formatValidationErrors(errors: ValidationError[]): string {
@@ -1596,6 +1687,7 @@ export function registerTestsCommand(program: Command): void {
             console.log(`  Instructions: ${info.default_instructions}`);
             console.log(`\n  Usage:`);
             console.log(`    helio-cli tests create --ux-metrics ${cmdOpts.type} ...`);
+            console.log(`    (or --ux-metrics-json for per-metric context and per-section overrides)`);
           }
           return;
         }
@@ -1610,6 +1702,7 @@ export function registerTestsCommand(program: Command): void {
             console.log();
           }
           console.log('Usage: helio-cli tests create --ux-metrics sentiment loyalty ...');
+          console.log('(or --ux-metrics-json \'[{"type":"sentiment","context":"...","sections":[...]}]\' for object form)');
           console.log(`\nExcluded types (require click tests or prototypes): ${EXCLUDED_UX_METRIC_TYPES.join(', ')}`);
         }
       }),
@@ -1791,13 +1884,25 @@ export function registerTestsCommand(program: Command): void {
     .option('--audiences <ids...>', 'Audience segment IDs')
     .requiredOption('--target-audience-size <n>', 'Target number of responses')
     .option('--questions <json>', 'Questions as JSON array or @path/to/file.json')
-    .option('--ux-metrics <types...>', 'UX metrics to add (auto-generates measurement questions)')
+    .option('--ux-metrics <types...>', 'UX metrics to add (auto-generates measurement questions; see --ux-metrics-json for per-metric context/section overrides)')
+    .option(
+      '--ux-metrics-json <json>',
+      'UX metrics as a JSON array or @path/to/file.json (object form: per-metric context, per-section instructions/assets/followups)',
+    )
     .option('--ux-metric-context <text>', 'Replace generic nouns in UX metric instructions (e.g. "the Helio dashboard")')
     .option('--dry-run', 'Validate locally without creating the test')
     .action(
       withErrorHandling(async (cmdOpts) => {
         const questions = cmdOpts.questions ? parseJsonOrFile(cmdOpts.questions) : undefined;
-        const uxMetrics: string[] | undefined = cmdOpts.uxMetrics;
+
+        if (cmdOpts.uxMetrics && cmdOpts.uxMetricsJson) {
+          throw new Error('Use either --ux-metrics or --ux-metrics-json, not both.');
+        }
+
+        let uxMetrics: UxMetricEntry[] | undefined = cmdOpts.uxMetrics;
+        if (cmdOpts.uxMetricsJson) {
+          uxMetrics = parseJsonArrayFlag(cmdOpts.uxMetricsJson, '--ux-metrics-json') as UxMetricEntry[];
+        }
 
         if (!questions && (!uxMetrics || uxMetrics.length === 0)) {
           throw new Error('Either --questions or --ux-metrics (or both) is required.');
@@ -1820,6 +1925,11 @@ export function registerTestsCommand(program: Command): void {
           return;
         }
 
+        // Only computed once validation has passed — entries are known-good here.
+        const uxMetricTypeNames: string[] = (uxMetrics ?? []).map(e =>
+          typeof e === 'string' ? e : (e as UxMetricObjectInput).type,
+        );
+
         // Resolve project ID from name if needed
         let projectId: string | undefined = cmdOpts.projectId;
         if (!projectId && cmdOpts.projectName) {
@@ -1832,9 +1942,10 @@ export function registerTestsCommand(program: Command): void {
 
         if (cmdOpts.dryRun) {
           const questionCount = questions ? (questions as unknown[]).length : 0;
-          const metricSectionCount = uxMetrics
-            ? uxMetrics.reduce((sum, m) => sum + (UX_METRIC_TYPES[m]?.section_count ?? 0), 0)
-            : 0;
+          const metricSectionCount = uxMetricTypeNames.reduce(
+            (sum, m) => sum + (UX_METRIC_TYPES[m]?.section_count ?? 0),
+            0,
+          );
           const totalSections = questionCount + metricSectionCount;
           const audienceSize = parsePositiveInt(cmdOpts.targetAudienceSize, '--target-audience-size');
           const spend = audienceSize * totalSections;
@@ -1855,12 +1966,21 @@ export function registerTestsCommand(program: Command): void {
               instructions: q.instructions,
             }));
           }
-          if (uxMetrics && uxMetrics.length > 0) {
-            summary.ux_metrics = uxMetrics.map(m => ({
-              metric_type: m,
-              section_count: UX_METRIC_TYPES[m]?.section_count ?? 0,
-              section_types: UX_METRIC_TYPES[m]?.section_types ?? 'unknown',
-            }));
+          if (uxMetricTypeNames.length > 0) {
+            summary.ux_metrics = (uxMetrics ?? []).map(e => {
+              const m = typeof e === 'string' ? e : (e as UxMetricObjectInput).type;
+              const entrySummary: Record<string, unknown> = {
+                metric_type: m,
+                section_count: UX_METRIC_TYPES[m]?.section_count ?? 0,
+                section_types: UX_METRIC_TYPES[m]?.section_types ?? 'unknown',
+              };
+              if (typeof e !== 'string') {
+                const obj = e as UxMetricObjectInput;
+                if (obj.context) entrySummary.context = obj.context;
+                if (obj.sections?.length) entrySummary.section_overrides = obj.sections;
+              }
+              return entrySummary;
+            });
             if (cmdOpts.uxMetricContext) {
               summary.ux_metric_context = cmdOpts.uxMetricContext;
             }
@@ -1873,8 +1993,8 @@ export function registerTestsCommand(program: Command): void {
             console.log(`  Project:       ${projectId}`);
             console.log(`  Audience:      ${audienceSize} (${summary.audience_type})`);
             console.log(`  Questions:     ${questionCount}`);
-            if (uxMetrics && uxMetrics.length > 0) {
-              console.log(`  UX metrics:    ${uxMetrics.join(', ')} (${metricSectionCount} auto-generated sections)`);
+            if (uxMetricTypeNames.length > 0) {
+              console.log(`  UX metrics:    ${uxMetricTypeNames.join(', ')} (${metricSectionCount} auto-generated sections)`);
               if (cmdOpts.uxMetricContext) {
                 console.log(`  Metric context: "${cmdOpts.uxMetricContext}" (replaces generic nouns in instructions)`);
               }
@@ -1886,13 +2006,24 @@ export function registerTestsCommand(program: Command): void {
                 console.log(`  Q${q.position}. [${q.type}] ${q.instructions}`);
               }
             }
-            if (uxMetrics && uxMetrics.length > 0) {
+            if (uxMetricTypeNames.length > 0) {
               console.log();
               console.log('  \x1b[1mUX Metrics (auto-generated):\x1b[0m');
-              for (const m of uxMetrics) {
+              for (const e of uxMetrics ?? []) {
+                const m = typeof e === 'string' ? e : (e as UxMetricObjectInput).type;
                 const info = UX_METRIC_TYPES[m];
                 if (info) {
                   console.log(`    ${m} — ${info.section_count} section(s): ${info.section_types}`);
+                }
+                if (typeof e !== 'string') {
+                  const obj = e as UxMetricObjectInput;
+                  if (obj.context) {
+                    console.log(`      context: "${obj.context}"`);
+                  }
+                  obj.sections?.forEach((override, i) => {
+                    const keys = Object.keys(override).join(', ');
+                    console.log(`      section ${i + 1} overrides: ${keys}`);
+                  });
                 }
               }
             }
@@ -1940,6 +2071,10 @@ export function registerTestsCommand(program: Command): void {
     .option('--can-skip-cards', 'Allow skipping cards (for card_sort)')
     .option('--asset-id <id>', 'Asset ID (for free_response stimulus)')
     .option('--site-link <url>', 'Site link URL (for free_response stimulus)')
+    .option('--position <n>', 'Insert at this 1-based position (appends if omitted)')
+    .option('--followup <text>', 'Follow-up question text')
+    .option('--followup-required', 'Mark the follow-up as required')
+    .option('--followup-for-choices <positions...>', '0-based choice positions that trigger the follow-up')
     .action(
       withErrorHandling(async (id: string, cmdOpts) => {
         // Build question object from flags
@@ -1959,6 +2094,10 @@ export function registerTestsCommand(program: Command): void {
         if (cmdOpts.canSkipCards) question.can_skip_cards = true;
         if (cmdOpts.assetId) question.asset_id = cmdOpts.assetId;
         if (cmdOpts.siteLink) question.site_link = cmdOpts.siteLink;
+        if (cmdOpts.position) question.position = parsePositiveInt(cmdOpts.position, '--position');
+        const followup = buildFollowupFromFlags(cmdOpts);
+        assertFollowupChoicesInRange(followup, question.choices);
+        if (followup) question.followup = followup;
 
         // Validate the single question
         const errors = validateQuestions([question]);
@@ -1984,7 +2123,7 @@ export function registerTestsCommand(program: Command): void {
 
   cmd
     .command('edit-question <test-id> <section-id>')
-    .description('Replace a question on a draft test (or update instructions/assets on a UX metric section)')
+    .description('Replace a question on a draft test (or edit instructions/assets/choices/randomize/follow-ups on a UX metric section)')
     .option('--type <type>', 'Question type (required for regular questions, omit for UX metric sections)')
     .option('--instructions <text>', 'Question text')
     .option('--choices <items...>', 'Choices')
@@ -1992,6 +2131,7 @@ export function registerTestsCommand(program: Command): void {
     .option('--custom-choices <items...>', 'Custom scale labels')
     .option('--allow-multiple', 'Allow multiple selections')
     .option('--randomize-choices', 'Randomize choice order')
+    .option('--no-randomize-choices', 'Disable randomized choice order')
     .option('--categories <items...>', 'Categories')
     .option('--points <n>', 'Total points')
     .option('--points-label <label>', 'Label for points')
@@ -1999,8 +2139,19 @@ export function registerTestsCommand(program: Command): void {
     .option('--can-skip-cards', 'Allow skipping cards')
     .option('--asset-id <id>', 'Asset ID (stimulus image)')
     .option('--site-link <url>', 'Site link URL (stimulus)')
+    .option('--followup <text>', 'Follow-up question text')
+    .option('--followup-required', 'Mark the follow-up as required')
+    .option('--followup-for-choices <positions...>', '0-based choice positions that trigger the follow-up')
+    .option('--remove-followup', 'Remove the existing follow-up from this question')
     .action(
       withErrorHandling(async (testId: string, sectionId: string, cmdOpts) => {
+        if (cmdOpts.removeFollowup && cmdOpts.followup) {
+          throw new Error('Use either --followup or --remove-followup, not both.');
+        }
+        if (cmdOpts.removeFollowup && (cmdOpts.followupRequired || cmdOpts.followupForChoices)) {
+          throw new Error('--remove-followup cannot be combined with --followup-required or --followup-for-choices.');
+        }
+
         const question: QuestionInput = {};
         if (cmdOpts.type) question.type = cmdOpts.type;
         if (cmdOpts.instructions) question.instructions = cmdOpts.instructions;
@@ -2008,7 +2159,7 @@ export function registerTestsCommand(program: Command): void {
         if (cmdOpts.scaleType) question.scale_type = cmdOpts.scaleType;
         if (cmdOpts.customChoices) question.custom_choices = cmdOpts.customChoices;
         if (cmdOpts.allowMultiple) question.allow_multiple = true;
-        if (cmdOpts.randomizeChoices) question.randomize_choices = true;
+        if (cmdOpts.randomizeChoices !== undefined) question.randomize_choices = cmdOpts.randomizeChoices;
         if (cmdOpts.categories) question.categories = cmdOpts.categories;
         if (cmdOpts.points) question.points = parsePositiveInt(cmdOpts.points, '--points');
         if (cmdOpts.pointsLabel) question.points_label = cmdOpts.pointsLabel;
@@ -2016,6 +2167,13 @@ export function registerTestsCommand(program: Command): void {
         if (cmdOpts.canSkipCards) question.can_skip_cards = true;
         if (cmdOpts.assetId) question.asset_id = cmdOpts.assetId;
         if (cmdOpts.siteLink) question.site_link = cmdOpts.siteLink;
+        if (cmdOpts.removeFollowup) {
+          question.followup = { remove: true };
+        } else {
+          const followup = buildFollowupFromFlags(cmdOpts);
+          assertFollowupChoicesInRange(followup, question.choices);
+          if (followup) question.followup = followup;
+        }
 
         // If type is provided, this is a full question replacement — validate normally
         if (question.type) {
@@ -2037,7 +2195,6 @@ export function registerTestsCommand(program: Command): void {
             ['scale_type', '--scale-type'],
             ['custom_choices', '--custom-choices'],
             ['allow_multiple', '--allow-multiple'],
-            ['randomize_choices', '--randomize-choices'],
             ['categories', '--categories'],
             ['points', '--points'],
             ['points_label', '--points-label'],
@@ -2051,8 +2208,17 @@ export function registerTestsCommand(program: Command): void {
             throw new Error(`Structural flags not allowed without --type (UX metric sections only support safe edits): ${present.join(', ')}`);
           }
           // At least one safe field must be provided
-          if (!question.instructions && !question.asset_id && !question.site_link && !question.choices) {
-            throw new Error('Provide at least one of --instructions, --asset-id, --site-link, or --choices (intent only).');
+          if (
+            !question.instructions &&
+            !question.asset_id &&
+            !question.site_link &&
+            !question.choices &&
+            question.randomize_choices === undefined &&
+            !question.followup
+          ) {
+            throw new Error(
+              'Provide at least one of --instructions, --asset-id, --site-link, --choices, --randomize-choices, --followup, or --remove-followup.',
+            );
           }
         }
 
@@ -2087,10 +2253,27 @@ export function registerTestsCommand(program: Command): void {
   cmd
     .command('add-ux-metrics <id>')
     .description('Add UX metrics to an existing draft test')
-    .requiredOption('--metrics <types...>', 'UX metric types to add')
+    .option('--metrics <types...>', 'UX metric types to add')
+    .option(
+      '--metrics-json <json>',
+      'UX metrics as a JSON array or @path/to/file.json (object form: per-metric context, per-section instructions/assets/followups)',
+    )
+    .option('--position <n>', 'Insert the metric block at this 1-based position (appends if omitted)')
     .action(
       withErrorHandling(async (id: string, cmdOpts) => {
-        const metrics: string[] = cmdOpts.metrics;
+        if (cmdOpts.metrics && cmdOpts.metricsJson) {
+          throw new Error('Use either --metrics or --metrics-json, not both.');
+        }
+        if (!cmdOpts.metrics && !cmdOpts.metricsJson) {
+          throw new Error('Provide --metrics or --metrics-json.');
+        }
+
+        let metrics: UxMetricEntry[];
+        if (cmdOpts.metricsJson) {
+          metrics = parseJsonArrayFlag(cmdOpts.metricsJson, '--metrics-json') as UxMetricEntry[];
+        } else {
+          metrics = cmdOpts.metrics;
+        }
 
         const errors = validateUxMetrics(metrics);
         if (errors.length > 0) {
@@ -2102,12 +2285,21 @@ export function registerTestsCommand(program: Command): void {
           return;
         }
 
+        const body: Record<string, unknown> = { add_ux_metrics: metrics };
+        if (cmdOpts.position) {
+          body.add_ux_metrics_position = parsePositiveInt(cmdOpts.position, '--position');
+        }
+
+        const metricLabel = metrics
+          .map(m => (typeof m === 'string' ? m : (m as UxMetricObjectInput).type))
+          .join(', ');
+
         const client = makeClient(program);
-        const data = await client.patch(`tests/${id}`, { add_ux_metrics: metrics });
+        const data = await client.patch(`tests/${id}`, body);
         if (isJsonMode()) {
           printJson(data);
         } else {
-          console.log(`\x1b[32m✓\x1b[0m Added UX metrics to test ${id}: ${metrics.join(', ')}`);
+          console.log(`\x1b[32m✓\x1b[0m Added UX metrics to test ${id}: ${metricLabel}`);
           printKeyValue(data as Record<string, unknown>);
         }
       }),
