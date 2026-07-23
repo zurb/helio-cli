@@ -1,10 +1,10 @@
 {
   "name": "@zurb/helio-cli",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "CLI for the Helio Public API",
   "type": "module",
   "bin": {
-    "helio-cli": "./dist/index.js"
+    "helio-cli": "dist/index.js"
   },
   "files": [
     "dist/index.js",
