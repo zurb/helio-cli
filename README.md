@@ -14,6 +14,16 @@ npm install -g @zurb/helio-cli
 
 Requires Node.js >= 22.
 
+## Updating
+
+The CLI checks the npm registry for new versions at most once a day and prints a notice when one is available (TTY only — never in `--output json`, CI, or piped output). To update:
+
+```bash
+helio-cli update
+```
+
+`helio-cli update --check` reports whether a newer version exists without installing. Set `HELIO_NO_UPDATE_CHECK=1` to disable the background check entirely.
+
 ## Authentication
 
 Get your API ID and Token from [my.helio.app/account/organization](https://my.helio.app/account/organization) (scroll to the API section).

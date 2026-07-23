@@ -13,6 +13,8 @@ import { registerAudiencesCommand } from './commands/audiences.js';
 import { registerInterceptsCommand } from './commands/intercepts.js';
 import { registerResponsesCommand } from './commands/responses.js';
 import { registerAssetsCommand } from './commands/assets.js';
+import { registerUpdateCommand } from './commands/update.js';
+import { startUpdateCheck } from './update-check.js';
 
 const pkg = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf-8'),
@@ -63,6 +65,7 @@ registerAuthCommand(program);
 registerConfigCommand(program);
 registerStatusCommand(program);
 registerDoctorCommand(program);
+registerUpdateCommand(program, pkg.version);
 registerGuideCommand(program);
 
 // Resource commands
@@ -75,7 +78,14 @@ registerInterceptsCommand(program);
 registerResponsesCommand(program);
 registerAssetsCommand(program);
 
-program.parseAsync().catch((err: Error & { exitCode?: number }) => {
-  // Commander throws on parse errors with exitOverride(); outputError already printed the message.
-  process.exit(err.exitCode ?? 1);
-});
+// Skip the startup check when running `update` itself — it does its own check.
+const finishUpdateCheck =
+  process.argv[2] === 'update' ? async () => {} : startUpdateCheck(pkg.version);
+
+program
+  .parseAsync()
+  .then(() => finishUpdateCheck())
+  .catch((err: Error & { exitCode?: number }) => {
+    // Commander throws on parse errors with exitOverride(); outputError already printed the message.
+    process.exit(err.exitCode ?? 1);
+  });

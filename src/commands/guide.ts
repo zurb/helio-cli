@@ -279,6 +279,10 @@ const GUIDE = `
   Run diagnostics:
     $ helio-cli doctor
 
+  Update to the latest version:
+    $ helio-cli update
+    $ helio-cli update --check           # check only, don't install
+
   Check authentication:
     $ helio-cli auth status
 
