@@ -341,4 +341,28 @@ describe('resolveTestMeta', () => {
     const meta = resolveTestMeta('01REQUESTED', fixture, study);
     expect(meta.responses_count).toBe(0);
   });
+
+  // helio#4990: the show response now carries test-level account_id/account_name
+  // (ULIDs), so the header should be complete even when the report call fails.
+  it('uses test-level account fields from the show response without a study', () => {
+    const enriched = {
+      sections: [],
+      account_id: '01ACCTULID',
+      account_name: 'ZURB',
+    } as unknown as TestShowResponse;
+    const meta = resolveTestMeta('01REQUESTED', enriched, null);
+    expect(meta.account_id).toBe('01ACCTULID');
+    expect(meta.account_name).toBe('ZURB');
+  });
+
+  it('prefers test-level account fields over the top-level account object', () => {
+    const enriched = {
+      sections: [],
+      account_id: '01ACCTULID',
+      account_name: 'ZURB',
+    } as unknown as TestShowResponse;
+    const meta = resolveTestMeta('01REQUESTED', enriched, null, { id: 139, name: 'Other' });
+    expect(meta.account_id).toBe('01ACCTULID');
+    expect(meta.account_name).toBe('ZURB');
+  });
 });
