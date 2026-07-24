@@ -47,7 +47,7 @@ describe('validateQuestions — top-level shape', () => {
   });
 
   it('rejects non-creatable types with a UI-only message', () => {
-    for (const type of ['click_test', 'tree_test', 'prototype_task']) {
+    for (const type of ['tree_test', 'prototype_task']) {
       const errors = validateQuestions(q({ type }));
       expect(errors[0].message).toMatch(/only be created via the UI/);
     }
@@ -177,6 +177,63 @@ describe('validateQuestions — free_response and nps', () => {
 
   it('nps needs only type + instructions', () => {
     expect(validateQuestions(q({ type: 'nps' }))).toEqual([]);
+  });
+});
+
+// ─── validateQuestions: click_test ───────────────────────────────────────────
+
+describe('validateQuestions — click_test', () => {
+  it('accepts an engagement click test (asset only, no hotspots)', () => {
+    expect(validateQuestions(q({ type: 'click_test', asset_id: 123 }))).toEqual([]);
+  });
+
+  it('accepts ClickTest as an alias', () => {
+    expect(validateQuestions(q({ type: 'ClickTest', asset_id: 123 }))).toEqual([]);
+  });
+
+  it('accepts hotspots with valid relative coordinates', () => {
+    const errors = validateQuestions(
+      q({
+        type: 'click_test',
+        asset_id: 123,
+        hotspots: [
+          { name: 'CTA', x: 0.1, y: 0.2, width: 0.3, height: 0.05 },
+          { x: 0.5, y: 0.5, width: 0.1, height: 0.1, priority: 'Secondary' },
+        ],
+      }),
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it('requires asset_id', () => {
+    const errors = validateQuestions(q({ type: 'click_test' }));
+    expect(fields(errors)).toEqual(['asset_id']);
+  });
+
+  it('rejects non-array hotspots', () => {
+    const errors = validateQuestions(q({ type: 'click_test', asset_id: 1, hotspots: { x: 0.1 } }));
+    expect(fields(errors)).toEqual(['hotspots']);
+  });
+
+  it('requires numeric x/y/width/height on each hotspot', () => {
+    const errors = validateQuestions(
+      q({ type: 'click_test', asset_id: 1, hotspots: [{ x: 0.1, y: 0.2 }] }),
+    );
+    expect(fields(errors)).toEqual(['hotspots[0].width', 'hotspots[0].height']);
+  });
+
+  it('rejects out-of-range coordinates and zero dimensions', () => {
+    const errors = validateQuestions(
+      q({ type: 'click_test', asset_id: 1, hotspots: [{ x: 1.5, y: 0.2, width: 0, height: 0.1 }] }),
+    );
+    expect(fields(errors)).toEqual(['hotspots[0].x', 'hotspots[0].width']);
+  });
+
+  it('rejects invalid priority', () => {
+    const errors = validateQuestions(
+      q({ type: 'click_test', asset_id: 1, hotspots: [{ x: 0.1, y: 0.2, width: 0.1, height: 0.1, priority: 'Urgent' }] }),
+    );
+    expect(fields(errors)).toEqual(['hotspots[0].priority']);
   });
 });
 

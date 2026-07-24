@@ -138,7 +138,18 @@ const QUESTION_TYPES = {
   },
   click_test: {
     description: 'Click on an image to identify areas of interest',
-    creatable: false,
+    creatable: true,
+    also_accepts: 'ClickTest',
+    required: ['type', 'instructions', 'asset_id'],
+    optional: ['hotspots', 'site_link'],
+    example: {
+      type: 'click_test',
+      instructions: 'Where would you click to start a return?',
+      asset_id: 123,
+      hotspots: [{ name: 'Returns link', x: 0.1, y: 0.2, width: 0.3, height: 0.05, priority: 'Primary' }],
+    },
+    notes:
+      'asset_id is required (upload via `assets upload`). Omit hotspots for an engagement click test (heatmap only); include them for a success click test. Coordinates are relative (0-1). priority: Primary | Secondary | Tertiary (default Primary).',
     summary_fields: 'results: [{id, text, percent, count}]',
     response_fields: 'clicks: [{x, y}] (relative coordinates)',
   },
@@ -555,6 +566,7 @@ interface QuestionInput {
   can_skip_cards?: boolean;
   position?: number;
   followup?: FollowupInput;
+  hotspots?: unknown[];
   [key: string]: unknown;
 }
 
@@ -594,7 +606,10 @@ const TYPE_ALIASES: Record<string, string> = {
   CardSort: 'card_sort',
   PointAllocation: 'point_allocation',
   MaxDiff: 'max_diff',
+  ClickTest: 'click_test',
 };
+
+const HOTSPOT_PRIORITIES = ['Primary', 'Secondary', 'Tertiary'];
 
 const VALID_SCALE_TYPES = [
   'agreement', 'occurrence', 'importance', 'quality', 'comprehension',
@@ -933,6 +948,52 @@ export function validateQuestions(questions: unknown): ValidationError[] {
         });
       } else {
         validateStringItems(q.choices, 'choices', num, errors);
+      }
+    }
+
+    if (canonical === 'click_test') {
+      if (q.asset_id === undefined || q.asset_id === null || q.asset_id === '') {
+        errors.push({
+          question: num,
+          field: 'asset_id',
+          message: 'Required: image asset id (upload via `assets upload`)',
+        });
+      }
+      if (q.hotspots !== undefined) {
+        if (!Array.isArray(q.hotspots)) {
+          errors.push({ question: num, field: 'hotspots', message: 'Must be an array of hotspot objects' });
+        } else {
+          for (let h = 0; h < q.hotspots.length; h++) {
+            const hotspot = q.hotspots[h] as Record<string, unknown>;
+            if (!hotspot || typeof hotspot !== 'object' || Array.isArray(hotspot)) {
+              errors.push({ question: num, field: `hotspots[${h}]`, message: 'Must be an object' });
+              continue;
+            }
+            for (const key of ['x', 'y', 'width', 'height']) {
+              const value = hotspot[key];
+              if (typeof value !== 'number') {
+                errors.push({
+                  question: num,
+                  field: `hotspots[${h}].${key}`,
+                  message: 'Required: number relative to the image (0-1)',
+                });
+              } else if (key === 'x' || key === 'y' ? value < 0 || value > 1 : value <= 0 || value > 1) {
+                errors.push({
+                  question: num,
+                  field: `hotspots[${h}].${key}`,
+                  message: key === 'x' || key === 'y' ? 'Must be between 0 and 1' : 'Must be greater than 0 and at most 1',
+                });
+              }
+            }
+            if (hotspot.priority !== undefined && !HOTSPOT_PRIORITIES.includes(hotspot.priority as string)) {
+              errors.push({
+                question: num,
+                field: `hotspots[${h}].priority`,
+                message: `Must be one of: ${HOTSPOT_PRIORITIES.join(', ')}`,
+              });
+            }
+          }
+        }
       }
     }
   }
@@ -2119,7 +2180,7 @@ export function registerTestsCommand(program: Command): void {
   cmd
     .command('add-question <id>')
     .description('Add a question to an existing draft test')
-    .requiredOption('--type <type>', 'Question type: free_response, multiple_choice, likert, nps, ranking, preference, matrix, card_sort, point_allocation, max_diff')
+    .requiredOption('--type <type>', 'Question type: free_response, multiple_choice, likert, nps, ranking, preference, matrix, card_sort, point_allocation, max_diff, click_test')
     .requiredOption('--instructions <text>', 'Question text')
     .option('--choices <items...>', 'Choices (for multiple_choice, ranking, preference, matrix, card_sort, point_allocation, max_diff)')
     .option('--scale-type <scale>', 'Scale type (for likert)')
@@ -2131,8 +2192,9 @@ export function registerTestsCommand(program: Command): void {
     .option('--points-label <label>', 'Label for points (for point_allocation)')
     .option('--random-category-order', 'Randomize category order (for card_sort)')
     .option('--can-skip-cards', 'Allow skipping cards (for card_sort)')
-    .option('--asset-id <id>', 'Asset ID (for free_response stimulus)')
+    .option('--asset-id <id>', 'Asset ID (stimulus image; required for click_test)')
     .option('--site-link <url>', 'Site link URL (for free_response stimulus)')
+    .option('--hotspots <json>', 'Hotspots as JSON array or @path/to/file.json (for click_test): [{name?, x, y, width, height, priority?}]')
     .option('--position <n>', 'Insert at this 1-based position (appends if omitted)')
     .option('--followup <text>', 'Follow-up question text')
     .option('--followup-required', 'Mark the follow-up as required')
@@ -2156,6 +2218,7 @@ export function registerTestsCommand(program: Command): void {
         if (cmdOpts.canSkipCards) question.can_skip_cards = true;
         if (cmdOpts.assetId) question.asset_id = cmdOpts.assetId;
         if (cmdOpts.siteLink) question.site_link = cmdOpts.siteLink;
+        if (cmdOpts.hotspots) question.hotspots = parseJsonOrFile(cmdOpts.hotspots) as unknown[];
         if (cmdOpts.position) question.position = parsePositiveInt(cmdOpts.position, '--position');
         const followup = buildFollowupFromFlags(cmdOpts);
         assertFollowupChoicesInRange(followup, question.choices);
@@ -2201,6 +2264,7 @@ export function registerTestsCommand(program: Command): void {
     .option('--can-skip-cards', 'Allow skipping cards')
     .option('--asset-id <id>', 'Asset ID (stimulus image)')
     .option('--site-link <url>', 'Site link URL (stimulus)')
+    .option('--hotspots <json>', 'Hotspots as JSON array or @path/to/file.json (for click_test): [{name?, x, y, width, height, priority?}]')
     .option('--followup <text>', 'Follow-up question text')
     .option('--followup-required', 'Mark the follow-up as required')
     .option('--followup-for-choices <positions...>', '0-based choice positions that trigger the follow-up')
@@ -2229,6 +2293,7 @@ export function registerTestsCommand(program: Command): void {
         if (cmdOpts.canSkipCards) question.can_skip_cards = true;
         if (cmdOpts.assetId) question.asset_id = cmdOpts.assetId;
         if (cmdOpts.siteLink) question.site_link = cmdOpts.siteLink;
+        if (cmdOpts.hotspots) question.hotspots = parseJsonOrFile(cmdOpts.hotspots) as unknown[];
         if (cmdOpts.removeFollowup) {
           question.followup = { remove: true };
         } else {
@@ -2262,6 +2327,7 @@ export function registerTestsCommand(program: Command): void {
             ['points_label', '--points-label'],
             ['random_category_order', '--random-category-order'],
             ['can_skip_cards', '--can-skip-cards'],
+            ['hotspots', '--hotspots'],
           ];
           const present = structuralFlags
             .filter(([key]) => (question as Record<string, unknown>)[key] !== undefined)
