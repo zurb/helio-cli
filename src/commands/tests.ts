@@ -611,6 +611,10 @@ const TYPE_ALIASES: Record<string, string> = {
 
 const HOTSPOT_PRIORITIES = ['Primary', 'Secondary', 'Tertiary'];
 
+// Read-only model attrs leaked by GET responses; the API rejects them on
+// write, so fail fast client-side with the correct shape.
+const LEGACY_FOLLOWUP_KEYS = ['enable_followup', 'followup_question', 'followup_required', 'choice_required_followup'];
+
 const VALID_SCALE_TYPES = [
   'agreement', 'occurrence', 'importance', 'quality', 'comprehension',
   'impression', 'expectations', 'usefulness', 'difficulty', 'likelihood', 'custom',
@@ -812,6 +816,17 @@ export function validateQuestions(questions: unknown): ValidationError[] {
     // Instructions validation
     if (!q.instructions || typeof q.instructions !== 'string' || !q.instructions.trim()) {
       errors.push({ question: num, field: 'instructions', message: 'Required (non-empty string)' });
+    }
+
+    // Legacy followup attrs copied from GET responses don't work on write
+    for (const key of LEGACY_FOLLOWUP_KEYS) {
+      if (key in q) {
+        errors.push({
+          question: num,
+          field: key,
+          message: 'Read-only report field. Use followup: {"question": "...", "required": true, "for_choices": [0]} instead',
+        });
+      }
     }
 
     // Type-specific validation

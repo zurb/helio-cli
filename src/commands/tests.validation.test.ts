@@ -180,6 +180,23 @@ describe('validateQuestions — free_response and nps', () => {
   });
 });
 
+// ─── validateQuestions: legacy followup keys ─────────────────────────────────
+
+describe('validateQuestions — legacy followup keys', () => {
+  it('rejects enable_followup / followup_question / followup_required with a pointer to the followup object', () => {
+    const errors = validateQuestions(
+      q({ type: 'nps', enable_followup: true, followup_question: 'Why?', followup_required: false }),
+    );
+    expect(fields(errors)).toEqual(['enable_followup', 'followup_question', 'followup_required']);
+    expect(errors[0].message).toMatch(/followup: \{/);
+  });
+
+  it('accepts the followup object form', () => {
+    const errors = validateQuestions(q({ type: 'nps', followup: { question: 'Why?', required: true } }));
+    expect(errors).toEqual([]);
+  });
+});
+
 // ─── validateQuestions: click_test ───────────────────────────────────────────
 
 describe('validateQuestions — click_test', () => {

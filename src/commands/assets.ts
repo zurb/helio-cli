@@ -94,6 +94,7 @@ export function registerAssetsCommand(program: Command): void {
     .option('--name <search>', 'Filter by filename (case-insensitive partial match)')
     .option('--limit <n>', 'Page size (default 25, max 100)')
     .option('--offset <n>', 'Records to skip')
+    .option('--account-id <id>', 'Act on this account instead of the token home account (staff tokens only)')
     .action(
       withErrorHandling(async (cmdOpts) => {
         const client = makeClient(program);
@@ -102,6 +103,7 @@ export function registerAssetsCommand(program: Command): void {
         if (cmdOpts.name) params.name = cmdOpts.name;
         if (cmdOpts.limit) params.limit = cmdOpts.limit;
         if (cmdOpts.offset) params.offset = cmdOpts.offset;
+        if (cmdOpts.accountId) params.account_id = cmdOpts.accountId;
 
         const data = (await client.get('assets', params)) as AssetListResponse;
         if (isJsonMode()) {
@@ -123,10 +125,13 @@ export function registerAssetsCommand(program: Command): void {
   cmd
     .command('get <id>')
     .description('Show one asset, including its signed URLs')
+    .option('--account-id <id>', 'Act on this account instead of the token home account (staff tokens only)')
     .action(
-      withErrorHandling(async (id: string) => {
+      withErrorHandling(async (id: string, cmdOpts) => {
         const client = makeClient(program);
-        const data = (await client.get(`assets/${id}`)) as { asset: AssetItem };
+        const params: Record<string, unknown> = {};
+        if (cmdOpts.accountId) params.account_id = cmdOpts.accountId;
+        const data = (await client.get(`assets/${id}`, params)) as { asset: AssetItem };
         if (isJsonMode()) {
           printJson(data);
           return;
@@ -138,12 +143,14 @@ export function registerAssetsCommand(program: Command): void {
   cmd
     .command('upload <file>')
     .description('Upload an image (jpg, jpeg, png, gif; max 10MB)')
+    .option('--account-id <id>', 'Upload into this account instead of the token home account (staff tokens only) — assets are account-scoped, so upload into the account whose test will use them')
     .action(
-      withErrorHandling(async (file: string) => {
+      withErrorHandling(async (file: string, cmdOpts) => {
         const { mime } = validateUploadFile(file);
 
         const form = new FormData();
         form.append('file', new Blob([readFileSync(file)], { type: mime }), basename(file));
+        if (cmdOpts.accountId) form.append('account_id', cmdOpts.accountId);
 
         const client = makeClient(program);
         const data = (await client.postMultipart('assets', form)) as { asset: AssetItem };

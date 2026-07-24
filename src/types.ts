@@ -24,12 +24,13 @@ export class HelioApiError extends Error {
     public status: number,
     public body: unknown,
   ) {
+    // Helio endpoints return {error: "..."}; some return {message: "..."}.
+    const fromBody =
+      typeof body === 'object' && body !== null
+        ? ((body as Record<string, unknown>).error ?? (body as Record<string, unknown>).message)
+        : body;
     const msg =
-      typeof body === 'object' && body !== null && 'message' in body
-        ? (body as { message: string }).message
-        : typeof body === 'string'
-          ? body
-          : `HTTP ${status}`;
+      typeof fromBody === 'string' && fromBody.trim() ? fromBody : `HTTP ${status}`;
     super(msg);
     this.name = 'HelioApiError';
   }
