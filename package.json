@@ -4,7 +4,8 @@
   "description": "CLI for the Helio Public API",
   "type": "module",
   "bin": {
-    "helio-cli": "dist/index.js"
+    "helio-cli": "dist/index.js",
+    "helio": "dist/index.js"
   },
   "files": [
     "dist/index.js",

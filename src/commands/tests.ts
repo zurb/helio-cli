@@ -2544,6 +2544,30 @@ export function registerTestsCommand(program: Command): void {
     );
 
   cmd
+    .command('clone <id>')
+    .description('Clone a test into a new draft (copies questions, UX metrics, branching, and audience)')
+    .action(
+      withErrorHandling(async (id: string) => {
+        const client = makeClient(program);
+        const data = (await client.post(`tests/${id}/clone`)) as {
+          test_id: string;
+          source_test_id: string;
+          name: string;
+          status: string;
+          project_id: string | null;
+          question_count: number;
+          preview_test_url: string;
+        };
+        if (isJsonMode()) {
+          printJson(data);
+        } else {
+          console.log(`\x1b[32m✓\x1b[0m Cloned test ${data.source_test_id}`);
+          printKeyValue(data as unknown as Record<string, unknown>);
+        }
+      }),
+    );
+
+  cmd
     .command('delete <id>')
     .description('Delete a draft test')
     .action(
