@@ -34,7 +34,7 @@ const QUESTION_TYPES = {
     creatable: true,
     also_accepts: 'MultipleChoice',
     required: ['type', 'instructions', 'choices'],
-    optional: ['allow_multiple', 'randomize_choices'],
+    optional: ['allow_multiple', 'randomize_choices', 'branching'],
     example: {
       type: 'multiple_choice',
       instructions: 'How did you hear about us?',
@@ -42,6 +42,8 @@ const QUESTION_TYPES = {
       allow_multiple: false,
       randomize_choices: false,
     },
+    notes:
+      'branching (single-select only, mutually exclusive with followup): [{choice: 0, action: "skip_to_question", question: 3}, {choice: 1, action: "end_test", message: "...", redirect_url: "..."}]. choice is a 0-based index; question is a 1-based question number (on add/edit-question, section_id is also accepted). end_test with message/redirect disqualifies with a custom end screen.',
     summary_fields: 'results: [{id, text, percent, count}]',
     response_fields: 'selected: [{id, text}], text (if follow-up)',
   },
@@ -567,6 +569,7 @@ interface QuestionInput {
   position?: number;
   followup?: FollowupInput;
   hotspots?: unknown[];
+  branching?: unknown[];
   [key: string]: unknown;
 }
 
@@ -610,6 +613,8 @@ const TYPE_ALIASES: Record<string, string> = {
 };
 
 const HOTSPOT_PRIORITIES = ['Primary', 'Secondary', 'Tertiary'];
+
+const BRANCH_ACTIONS = ['skip_to_question', 'end_test'];
 
 // Read-only model attrs leaked by GET responses; the API rejects them on
 // write, so fail fast client-side with the correct shape.
@@ -966,6 +971,10 @@ export function validateQuestions(questions: unknown): ValidationError[] {
       }
     }
 
+    if (q.branching !== undefined) {
+      validateBranching(q, num, errors);
+    }
+
     if (canonical === 'click_test') {
       if (q.asset_id === undefined || q.asset_id === null || q.asset_id === '') {
         errors.push({
@@ -1014,6 +1023,81 @@ export function validateQuestions(questions: unknown): ValidationError[] {
   }
 
   return errors;
+}
+
+function validateBranching(q: QuestionInput, num: number, errors: ValidationError[]): void {
+  const canonical = TYPE_ALIASES[q.type ?? ''] ?? q.type;
+  if (canonical !== 'multiple_choice') {
+    errors.push({ question: num, field: 'branching', message: 'Only supported on multiple_choice questions' });
+    return;
+  }
+  if (q.allow_multiple === true) {
+    errors.push({ question: num, field: 'branching', message: 'Requires single-select (remove allow_multiple)' });
+    return;
+  }
+  if (q.followup !== undefined) {
+    errors.push({ question: num, field: 'branching', message: 'Branching and followup are mutually exclusive' });
+    return;
+  }
+  if (!Array.isArray(q.branching)) {
+    errors.push({ question: num, field: 'branching', message: 'Must be an array of branch objects' });
+    return;
+  }
+
+  const choicesCount = Array.isArray(q.choices) ? q.choices.length : 0;
+  const seen = new Set<number>();
+  for (let b = 0; b < q.branching.length; b++) {
+    const entry = q.branching[b] as Record<string, unknown>;
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      errors.push({ question: num, field: `branching[${b}]`, message: 'Must be an object' });
+      continue;
+    }
+    const choice = entry.choice;
+    if (typeof choice !== 'number' || choice < 0 || choice >= choicesCount) {
+      errors.push({
+        question: num,
+        field: `branching[${b}].choice`,
+        message: `Must be a 0-based choice index (0-${choicesCount - 1})`,
+      });
+    } else if (seen.has(choice)) {
+      errors.push({ question: num, field: `branching[${b}].choice`, message: `Duplicate branch for choice ${choice}` });
+    } else {
+      seen.add(choice);
+    }
+
+    if (!BRANCH_ACTIONS.includes(entry.action as string)) {
+      errors.push({
+        question: num,
+        field: `branching[${b}].action`,
+        message: `Must be one of: ${BRANCH_ACTIONS.join(', ')}`,
+      });
+      continue;
+    }
+    if (entry.action === 'skip_to_question') {
+      const hasQuestion = entry.question !== undefined;
+      const hasSectionId = entry.section_id !== undefined;
+      if (hasQuestion === hasSectionId) {
+        errors.push({
+          question: num,
+          field: `branching[${b}]`,
+          message: 'skip_to_question needs exactly one of question (1-based number) or section_id',
+        });
+      } else if (hasQuestion && (typeof entry.question !== 'number' || entry.question < 1)) {
+        errors.push({
+          question: num,
+          field: `branching[${b}].question`,
+          message: 'Must be a positive 1-based question number',
+        });
+      }
+      if (entry.message !== undefined || entry.redirect_url !== undefined) {
+        errors.push({
+          question: num,
+          field: `branching[${b}]`,
+          message: 'message/redirect_url only apply to end_test',
+        });
+      }
+    }
+  }
 }
 
 function parseFollowupForChoices(items: string[] | undefined): number[] | undefined {
@@ -2210,6 +2294,7 @@ export function registerTestsCommand(program: Command): void {
     .option('--asset-id <id>', 'Asset ID (stimulus image; required for click_test)')
     .option('--site-link <url>', 'Site link URL (for free_response stimulus)')
     .option('--hotspots <json>', 'Hotspots as JSON array or @path/to/file.json (for click_test): [{name?, x, y, width, height, priority?}]')
+    .option('--branching <json>', 'Branching as JSON array or @file (single-select multiple_choice): [{choice, action: skip_to_question|end_test, question?|section_id?, message?, redirect_url?}]')
     .option('--position <n>', 'Insert at this 1-based position (appends if omitted)')
     .option('--followup <text>', 'Follow-up question text')
     .option('--followup-required', 'Mark the follow-up as required')
@@ -2234,6 +2319,7 @@ export function registerTestsCommand(program: Command): void {
         if (cmdOpts.assetId) question.asset_id = cmdOpts.assetId;
         if (cmdOpts.siteLink) question.site_link = cmdOpts.siteLink;
         if (cmdOpts.hotspots) question.hotspots = parseJsonOrFile(cmdOpts.hotspots) as unknown[];
+        if (cmdOpts.branching) question.branching = parseJsonOrFile(cmdOpts.branching) as unknown[];
         if (cmdOpts.position) question.position = parsePositiveInt(cmdOpts.position, '--position');
         const followup = buildFollowupFromFlags(cmdOpts);
         assertFollowupChoicesInRange(followup, question.choices);
@@ -2280,6 +2366,7 @@ export function registerTestsCommand(program: Command): void {
     .option('--asset-id <id>', 'Asset ID (stimulus image)')
     .option('--site-link <url>', 'Site link URL (stimulus)')
     .option('--hotspots <json>', 'Hotspots as JSON array or @path/to/file.json (for click_test): [{name?, x, y, width, height, priority?}]')
+    .option('--branching <json>', 'Branching as JSON array or @file (single-select multiple_choice): [{choice, action: skip_to_question|end_test, question?|section_id?, message?, redirect_url?}]')
     .option('--followup <text>', 'Follow-up question text')
     .option('--followup-required', 'Mark the follow-up as required')
     .option('--followup-for-choices <positions...>', '0-based choice positions that trigger the follow-up')
@@ -2309,6 +2396,7 @@ export function registerTestsCommand(program: Command): void {
         if (cmdOpts.assetId) question.asset_id = cmdOpts.assetId;
         if (cmdOpts.siteLink) question.site_link = cmdOpts.siteLink;
         if (cmdOpts.hotspots) question.hotspots = parseJsonOrFile(cmdOpts.hotspots) as unknown[];
+        if (cmdOpts.branching) question.branching = parseJsonOrFile(cmdOpts.branching) as unknown[];
         if (cmdOpts.removeFollowup) {
           question.followup = { remove: true };
         } else {
@@ -2343,6 +2431,7 @@ export function registerTestsCommand(program: Command): void {
             ['random_category_order', '--random-category-order'],
             ['can_skip_cards', '--can-skip-cards'],
             ['hotspots', '--hotspots'],
+            ['branching', '--branching'],
           ];
           const present = structuralFlags
             .filter(([key]) => (question as Record<string, unknown>)[key] !== undefined)

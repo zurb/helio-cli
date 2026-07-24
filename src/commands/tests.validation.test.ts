@@ -197,6 +197,75 @@ describe('validateQuestions — legacy followup keys', () => {
   });
 });
 
+// ─── validateQuestions: branching ────────────────────────────────────────────
+
+describe('validateQuestions — branching', () => {
+  const mc = (branching: unknown, extra: Record<string, unknown> = {}) =>
+    q({ type: 'multiple_choice', choices: ['Yes', 'No'], branching, ...extra });
+
+  it('accepts skip and end_test branches on single-select multiple choice', () => {
+    const errors = validateQuestions(
+      mc([
+        { choice: 0, action: 'skip_to_question', question: 3 },
+        { choice: 1, action: 'end_test', message: 'Not a fit' },
+      ]),
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it('accepts section_id as a skip target', () => {
+    const errors = validateQuestions(mc([{ choice: 0, action: 'skip_to_question', section_id: 'abc' }]));
+    expect(errors).toEqual([]);
+  });
+
+  it('rejects branching on non-multiple-choice questions', () => {
+    const errors = validateQuestions(q({ type: 'nps', branching: [{ choice: 0, action: 'end_test' }] }));
+    expect(fields(errors)).toEqual(['branching']);
+  });
+
+  it('rejects branching with allow_multiple', () => {
+    const errors = validateQuestions(mc([{ choice: 0, action: 'end_test' }], { allow_multiple: true }));
+    expect(errors[0].message).toMatch(/single-select/);
+  });
+
+  it('rejects branching combined with followup', () => {
+    const errors = validateQuestions(
+      mc([{ choice: 0, action: 'end_test' }], { followup: { question: 'Why?' } }),
+    );
+    expect(errors[0].message).toMatch(/mutually exclusive/);
+  });
+
+  it('rejects out-of-range and duplicate choice indexes', () => {
+    const errors = validateQuestions(
+      mc([
+        { choice: 5, action: 'end_test' },
+        { choice: 0, action: 'end_test' },
+        { choice: 0, action: 'end_test' },
+      ]),
+    );
+    expect(fields(errors)).toEqual(['branching[0].choice', 'branching[2].choice']);
+  });
+
+  it('rejects unknown actions', () => {
+    const errors = validateQuestions(mc([{ choice: 0, action: 'teleport' }]));
+    expect(fields(errors)).toEqual(['branching[0].action']);
+  });
+
+  it('requires exactly one of question or section_id on skip_to_question', () => {
+    expect(fields(validateQuestions(mc([{ choice: 0, action: 'skip_to_question' }])))).toEqual(['branching[0]']);
+    expect(
+      fields(validateQuestions(mc([{ choice: 0, action: 'skip_to_question', question: 2, section_id: 'x' }]))),
+    ).toEqual(['branching[0]']);
+  });
+
+  it('rejects message/redirect on skip_to_question', () => {
+    const errors = validateQuestions(
+      mc([{ choice: 0, action: 'skip_to_question', question: 2, message: 'nope' }]),
+    );
+    expect(errors[0].message).toMatch(/end_test/);
+  });
+});
+
 // ─── validateQuestions: click_test ───────────────────────────────────────────
 
 describe('validateQuestions — click_test', () => {
