@@ -264,6 +264,12 @@ describe('validateQuestions — branching', () => {
     );
     expect(errors[0].message).toMatch(/end_test/);
   });
+
+  it('rejects stray question/section_id on end_test', () => {
+    const errors = validateQuestions(mc([{ choice: 0, action: 'end_test', question: 3 }]));
+    expect(fields(errors)).toEqual(['branching[0]']);
+    expect(errors[0].message).toMatch(/skip_to_question/);
+  });
 });
 
 // ─── validateQuestions: click_test ───────────────────────────────────────────

@@ -43,7 +43,7 @@ const QUESTION_TYPES = {
       randomize_choices: false,
     },
     notes:
-      'branching (single-select only, mutually exclusive with followup): [{choice: 0, action: "skip_to_question", question: 3}, {choice: 1, action: "end_test", message: "...", redirect_url: "..."}]. choice is a 0-based index; question is a 1-based question number (on add/edit-question, section_id is also accepted). end_test with message/redirect disqualifies with a custom end screen.',
+      'branching (single-select only, mutually exclusive with followup, requires a Helio Enterprise plan): [{choice: 0, action: "skip_to_question", question: 3}, {choice: 1, action: "end_test", message: "...", redirect_url: "..."}]. choice is a 0-based index; question is a 1-based question number and must be a LATER question (forward-only skips, matching the editor); on add/edit-question, section_id is also accepted (uuid or numeric id). end_test with message/redirect disqualifies with a custom end screen.',
     summary_fields: 'results: [{id, text, percent, count}]',
     response_fields: 'selected: [{id, text}], text (if follow-up)',
   },
@@ -1096,6 +1096,13 @@ function validateBranching(q: QuestionInput, num: number, errors: ValidationErro
           message: 'message/redirect_url only apply to end_test',
         });
       }
+    }
+    if (entry.action === 'end_test' && (entry.question !== undefined || entry.section_id !== undefined)) {
+      errors.push({
+        question: num,
+        field: `branching[${b}]`,
+        message: 'question/section_id only apply to skip_to_question',
+      });
     }
   }
 }
