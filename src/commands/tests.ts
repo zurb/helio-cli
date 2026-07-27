@@ -423,10 +423,14 @@ function stripHtml(html: string): string {
 
 function printReportQuestions(questions: ReportQuestion[]): void {
   const sorted = [...questions].sort((a, b) => a.position - b.position);
-  for (const q of sorted) {
+  // The report serializer passes section.position through raw, and platform
+  // storage is 0-based — printing it directly labels the first question "Q0".
+  // Number by sorted order instead, matching printSectionQuestions.
+  for (let i = 0; i < sorted.length; i++) {
+    const q = sorted[i];
     const label = TYPE_LABELS[q.type] ?? q.type;
     const countStr = q.response_count != null ? ` (${q.response_count} responses)` : '';
-    console.log(`  \x1b[1mQ${q.position}.\x1b[0m [${label}] ${q.question}${countStr}`);
+    console.log(`  \x1b[1mQ${i + 1}.\x1b[0m [${label}] ${q.question}${countStr}`);
 
     const results = q.results as Record<string, unknown>[] | undefined;
 
@@ -765,7 +769,14 @@ function validateStringItems(items: unknown[], field: string, questionNum: numbe
   }
 }
 
-export function validateQuestions(questions: unknown): ValidationError[] {
+// `standalone` marks a single question being added or edited on an existing
+// test, where the array index says nothing about the question's real number.
+// Forward-only branching can only be checked when that number is known — from
+// the array position on create, or an explicit --position on add-question.
+export function validateQuestions(
+  questions: unknown,
+  opts: { standalone?: boolean } = {},
+): ValidationError[] {
   const errors: ValidationError[] = [];
 
   if (!Array.isArray(questions)) {
@@ -972,7 +983,18 @@ export function validateQuestions(questions: unknown): ValidationError[] {
     }
 
     if (q.branching !== undefined) {
-      validateBranching(q, num, errors);
+      const ownNumber = opts.standalone
+        ? typeof q.position === 'number'
+          ? q.position
+          : undefined
+        : num;
+      validateBranching(q, num, errors, {
+        ownNumber,
+        // On create, questions are identified by number only and the whole set
+        // is known, so both ends of the valid target range are checkable.
+        totalQuestions: opts.standalone ? undefined : questions.length,
+        allowSectionId: opts.standalone === true,
+      });
     }
 
     if (canonical === 'click_test') {
@@ -1025,7 +1047,19 @@ export function validateQuestions(questions: unknown): ValidationError[] {
   return errors;
 }
 
-function validateBranching(q: QuestionInput, num: number, errors: ValidationError[]): void {
+interface BranchingContext {
+  ownNumber?: number;
+  totalQuestions?: number;
+  allowSectionId: boolean;
+}
+
+function validateBranching(
+  q: QuestionInput,
+  num: number,
+  errors: ValidationError[],
+  ctx: BranchingContext,
+): void {
+  const { ownNumber, totalQuestions, allowSectionId } = ctx;
   const canonical = TYPE_ALIASES[q.type ?? ''] ?? q.type;
   if (canonical !== 'multiple_choice') {
     errors.push({ question: num, field: 'branching', message: 'Only supported on multiple_choice questions' });
@@ -1076,17 +1110,44 @@ function validateBranching(q: QuestionInput, num: number, errors: ValidationErro
     if (entry.action === 'skip_to_question') {
       const hasQuestion = entry.question !== undefined;
       const hasSectionId = entry.section_id !== undefined;
-      if (hasQuestion === hasSectionId) {
+      if (hasSectionId && !allowSectionId) {
+        // Sections don't exist yet at create time, so the API takes question
+        // numbers only there.
+        errors.push({
+          question: num,
+          field: `branching[${b}].section_id`,
+          message: 'Use question numbers (not section_id) when creating a test',
+        });
+      } else if (hasQuestion === hasSectionId) {
         errors.push({
           question: num,
           field: `branching[${b}]`,
-          message: 'skip_to_question needs exactly one of question (1-based number) or section_id',
+          message: allowSectionId
+            ? 'skip_to_question needs exactly one of question (1-based number) or section_id'
+            : 'skip_to_question needs a question (1-based number)',
         });
       } else if (hasQuestion && (typeof entry.question !== 'number' || entry.question < 1)) {
         errors.push({
           question: num,
           field: `branching[${b}].question`,
           message: 'Must be a positive 1-based question number',
+        });
+      } else if (hasQuestion && ownNumber !== undefined && (entry.question as number) <= ownNumber) {
+        const upper = totalQuestions !== undefined ? `${ownNumber + 1}-${totalQuestions}` : `after ${ownNumber}`;
+        errors.push({
+          question: num,
+          field: `branching[${b}].question`,
+          message: `Skips are forward-only: must target a later question (${upper}), got ${entry.question}`,
+        });
+      } else if (
+        hasQuestion &&
+        totalQuestions !== undefined &&
+        (entry.question as number) > totalQuestions
+      ) {
+        errors.push({
+          question: num,
+          field: `branching[${b}].question`,
+          message: `No question ${entry.question} — this test has ${totalQuestions}`,
         });
       }
       if (entry.message !== undefined || entry.redirect_url !== undefined) {
@@ -1961,7 +2022,7 @@ export function registerTestsCommand(program: Command): void {
         const sections = (data.test.sections ?? []).sort((a, b) => a.position - b.position);
 
         // Build block list: group consecutive ux_metric sections together
-        const blocks: { key: string; label: string; position: number }[] = [];
+        const blocks: { key: string; label: string }[] = [];
         const seenMetrics = new Set<string>();
 
         for (const s of sections) {
@@ -1977,7 +2038,6 @@ export function registerTestsCommand(program: Command): void {
               blocks.push({
                 key: `metric:${metricType}`,
                 label: `${metricType} metric (${metricSections.length} section${metricSections.length === 1 ? '' : 's'})`,
-                position: s.position,
               });
             }
           } else {
@@ -1985,7 +2045,6 @@ export function registerTestsCommand(program: Command): void {
             blocks.push({
               key: `section:${s.id}`,
               label: `[${typeLabel}] ${s.stripped_instructions || s.instructions || ''}`.trim(),
-              position: s.position,
             });
           }
         }
@@ -1994,7 +2053,10 @@ export function registerTestsCommand(program: Command): void {
           printJson({
             test_id: data.test.id,
             order: blocks.map(b => b.key),
-            blocks: blocks.map(b => ({ key: b.key, label: b.label, position: b.position })),
+            // Re-indexed to the 1-based question numbers that --position and
+            // branching `question` take. Raw section.position is 0-based
+            // platform storage and must not leak into scripted input.
+            blocks: blocks.map((b, i) => ({ key: b.key, label: b.label, position: i + 1 })),
           });
         } else {
           console.log(`\x1b[1m${data.test.name ?? id}\x1b[0m — current order:\n`);
@@ -2214,6 +2276,18 @@ export function registerTestsCommand(program: Command): void {
               summary.ux_metric_context = cmdOpts.uxMetricContext;
             }
           }
+          // Gates the CLI can't check locally, so a clean dry-run can still
+          // 400 on create. Called out here rather than discovered at send.
+          const warnings: string[] = [];
+          if (questions && (questions as QuestionInput[]).some(q => q.branching !== undefined)) {
+            warnings.push(
+              'Branching requires a Helio Enterprise account. Validation cannot see your plan, so this may still fail with a 400 on create.',
+            );
+          }
+          if (warnings.length > 0) {
+            summary.warnings = warnings;
+          }
+
           if (isJsonMode()) {
             printJson(summary);
           } else {
@@ -2255,6 +2329,9 @@ export function registerTestsCommand(program: Command): void {
                   });
                 }
               }
+            }
+            for (const w of warnings) {
+              console.log(`\n  \x1b[33m⚠\x1b[0m ${w}`);
             }
             console.log(`\nRun without --dry-run to create the test.`);
           }
@@ -2301,7 +2378,7 @@ export function registerTestsCommand(program: Command): void {
     .option('--asset-id <id>', 'Asset ID (stimulus image; required for click_test)')
     .option('--site-link <url>', 'Site link URL (for free_response stimulus)')
     .option('--hotspots <json>', 'Hotspots as JSON array or @path/to/file.json (for click_test): [{name?, x, y, width, height, priority?}]')
-    .option('--branching <json>', 'Branching as JSON array or @file (single-select multiple_choice): [{choice, action: skip_to_question|end_test, question?|section_id?, message?, redirect_url?}]')
+    .option('--branching <json>', 'Branching as JSON array or @file (single-select multiple_choice; requires a Helio Enterprise account): [{choice, action: skip_to_question|end_test, question?|section_id?, message?, redirect_url?}]. Skips are forward-only.')
     .option('--position <n>', 'Insert at this 1-based position (appends if omitted)')
     .option('--followup <text>', 'Follow-up question text')
     .option('--followup-required', 'Mark the follow-up as required')
@@ -2333,7 +2410,7 @@ export function registerTestsCommand(program: Command): void {
         if (followup) question.followup = followup;
 
         // Validate the single question
-        const errors = validateQuestions([question]);
+        const errors = validateQuestions([question], { standalone: true });
         if (errors.length > 0) {
           if (isJsonMode()) {
             printJson({ valid: false, errors });
@@ -2373,7 +2450,7 @@ export function registerTestsCommand(program: Command): void {
     .option('--asset-id <id>', 'Asset ID (stimulus image)')
     .option('--site-link <url>', 'Site link URL (stimulus)')
     .option('--hotspots <json>', 'Hotspots as JSON array or @path/to/file.json (for click_test): [{name?, x, y, width, height, priority?}]')
-    .option('--branching <json>', 'Branching as JSON array or @file (single-select multiple_choice): [{choice, action: skip_to_question|end_test, question?|section_id?, message?, redirect_url?}]')
+    .option('--branching <json>', 'Branching as JSON array or @file (single-select multiple_choice; requires a Helio Enterprise account): [{choice, action: skip_to_question|end_test, question?|section_id?, message?, redirect_url?}]. Skips are forward-only.')
     .option('--followup <text>', 'Follow-up question text')
     .option('--followup-required', 'Mark the follow-up as required')
     .option('--followup-for-choices <positions...>', '0-based choice positions that trigger the follow-up')
@@ -2417,7 +2494,7 @@ export function registerTestsCommand(program: Command): void {
           if (!question.instructions) {
             throw new Error('--instructions is required when --type is provided.');
           }
-          const errors = validateQuestions([question]);
+          const errors = validateQuestions([question], { standalone: true });
           if (errors.length > 0) {
             if (isJsonMode()) {
               printJson({ valid: false, errors });
@@ -2577,11 +2654,27 @@ export function registerTestsCommand(program: Command): void {
         }
 
         const client = makeClient(program);
+
+        // Removing sections resets any branch pointing into them, server-side
+        // and silently. Warn first so the loss is visible to the caller.
+        let branchingReset = false;
+        try {
+          const show = (await client.get(`tests/${id}`)) as { test: Record<string, unknown> };
+          branchingReset = show.test?.has_branching === true;
+        } catch {
+          // Non-fatal: the removal itself is the operation that matters.
+        }
+
         const data = await client.patch(`tests/${id}`, { remove_ux_metrics: metrics });
         if (isJsonMode()) {
-          printJson(data);
+          printJson(branchingReset ? { ...(data as object), branching_reset: true } : data);
         } else {
           console.log(`\x1b[32m✓\x1b[0m Removed UX metrics from test ${id}: ${metrics.join(', ')}`);
+          if (branchingReset) {
+            console.log(
+              `  \x1b[33m⚠\x1b[0m This test had branching. Branches targeting removed sections were reset — re-check with \x1b[1mtests get ${id}\x1b[0m.`,
+            );
+          }
           printKeyValue(data as Record<string, unknown>);
         }
       }),
@@ -2590,7 +2683,7 @@ export function registerTestsCommand(program: Command): void {
   cmd
     .command('reorder <id>')
     .description('Reorder questions and UX metric groups on a draft test')
-    .requiredOption('--order <blocks...>', 'Ordered block references: "section:<uuid>" or "metric:<type>"')
+    .requiredOption('--order <blocks...>', 'Ordered block references: "section:<uuid-or-id>" or "metric:<type>"')
     .action(
       withErrorHandling(async (id: string, cmdOpts) => {
         const order: string[] = cmdOpts.order;
@@ -2603,7 +2696,7 @@ export function registerTestsCommand(program: Command): void {
             errors.push({
               question: 0,
               field: `order[${i}]`,
-              message: `Invalid block "${entry}". Must be "section:<uuid>" or "metric:<type>"`,
+              message: `Invalid block "${entry}". Must be "section:<uuid-or-id>" or "metric:<type>"`,
             });
           }
         }

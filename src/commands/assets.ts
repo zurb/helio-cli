@@ -94,7 +94,7 @@ export function registerAssetsCommand(program: Command): void {
     .option('--name <search>', 'Filter by filename (case-insensitive partial match)')
     .option('--limit <n>', 'Page size (default 25, max 100)')
     .option('--offset <n>', 'Records to skip')
-    .option('--account-id <id>', 'Act on this account instead of the token home account (staff tokens only)')
+    .option('--account-id <id>', 'Act on this account instead of the token home account (for tokens with access to more than one account)')
     .action(
       withErrorHandling(async (cmdOpts) => {
         const client = makeClient(program);
@@ -125,7 +125,7 @@ export function registerAssetsCommand(program: Command): void {
   cmd
     .command('get <id>')
     .description('Show one asset, including its signed URLs')
-    .option('--account-id <id>', 'Act on this account instead of the token home account (staff tokens only)')
+    .option('--account-id <id>', 'Act on this account instead of the token home account (for tokens with access to more than one account)')
     .action(
       withErrorHandling(async (id: string, cmdOpts) => {
         const client = makeClient(program);
@@ -143,7 +143,7 @@ export function registerAssetsCommand(program: Command): void {
   cmd
     .command('upload <file>')
     .description('Upload an image (jpg, jpeg, png, gif; max 10MB)')
-    .option('--account-id <id>', 'Upload into this account instead of the token home account (staff tokens only) — assets are account-scoped, so upload into the account whose test will use them')
+    .option('--account-id <id>', 'Upload into this account instead of the token home account (for tokens with access to more than one account) — assets are account-scoped, so upload into the account whose test will use them')
     .action(
       withErrorHandling(async (file: string, cmdOpts) => {
         const { mime } = validateUploadFile(file);

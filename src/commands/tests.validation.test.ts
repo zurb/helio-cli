@@ -203,9 +203,16 @@ describe('validateQuestions — branching', () => {
   const mc = (branching: unknown, extra: Record<string, unknown> = {}) =>
     q({ type: 'multiple_choice', choices: ['Yes', 'No'], branching, ...extra });
 
+  // A create payload where the branching question is Q1, followed by enough
+  // filler that a forward skip has somewhere to land.
+  const mcOf = (total: number, branching: unknown, extra: Record<string, unknown> = {}) => [
+    { instructions: 'Valid instructions', type: 'multiple_choice', choices: ['Yes', 'No'], branching, ...extra },
+    ...Array.from({ length: total - 1 }, (_, i) => ({ instructions: `Filler ${i + 1}`, type: 'nps' })),
+  ];
+
   it('accepts skip and end_test branches on single-select multiple choice', () => {
     const errors = validateQuestions(
-      mc([
+      mcOf(3, [
         { choice: 0, action: 'skip_to_question', question: 3 },
         { choice: 1, action: 'end_test', message: 'Not a fit' },
       ]),
@@ -213,9 +220,36 @@ describe('validateQuestions — branching', () => {
     expect(errors).toEqual([]);
   });
 
-  it('accepts section_id as a skip target', () => {
-    const errors = validateQuestions(mc([{ choice: 0, action: 'skip_to_question', section_id: 'abc' }]));
-    expect(errors).toEqual([]);
+  it('accepts section_id as a skip target on add/edit, but not on create', () => {
+    const branching = [{ choice: 0, action: 'skip_to_question', section_id: 'abc' }];
+    expect(validateQuestions(mc(branching), { standalone: true })).toEqual([]);
+    expect(fields(validateQuestions(mc(branching)))).toEqual(['branching[0].section_id']);
+  });
+
+  it('rejects backward and self-targeting skips on create', () => {
+    const back = validateQuestions(
+      mcOf(4, [{ choice: 0, action: 'skip_to_question', question: 1 }]).reverse(),
+    );
+    // Q4 is the branching question after reverse(); targeting Q1 goes backward.
+    expect(back.map(e => e.field)).toContain('branching[0].question');
+    expect(back[0].message).toMatch(/forward-only/);
+
+    const self = validateQuestions(mcOf(3, [{ choice: 0, action: 'skip_to_question', question: 1 }]));
+    expect(self[0].message).toMatch(/forward-only/);
+  });
+
+  it('rejects skips past the end of the test on create', () => {
+    const errors = validateQuestions(mcOf(2, [{ choice: 0, action: 'skip_to_question', question: 9 }]));
+    expect(fields(errors)).toEqual(['branching[0].question']);
+    expect(errors[0].message).toMatch(/this test has 2/);
+  });
+
+  it('skips the forward-only check on add/edit when position is unknown', () => {
+    const branching = [{ choice: 0, action: 'skip_to_question', question: 2 }];
+    expect(validateQuestions(mc(branching), { standalone: true })).toEqual([]);
+    // With an explicit --position, the check applies again.
+    const errors = validateQuestions(mc(branching, { position: 5 }), { standalone: true });
+    expect(errors[0].message).toMatch(/forward-only/);
   });
 
   it('rejects branching on non-multiple-choice questions', () => {
@@ -254,13 +288,17 @@ describe('validateQuestions — branching', () => {
   it('requires exactly one of question or section_id on skip_to_question', () => {
     expect(fields(validateQuestions(mc([{ choice: 0, action: 'skip_to_question' }])))).toEqual(['branching[0]']);
     expect(
-      fields(validateQuestions(mc([{ choice: 0, action: 'skip_to_question', question: 2, section_id: 'x' }]))),
+      fields(
+        validateQuestions(mc([{ choice: 0, action: 'skip_to_question', question: 2, section_id: 'x' }]), {
+          standalone: true,
+        }),
+      ),
     ).toEqual(['branching[0]']);
   });
 
   it('rejects message/redirect on skip_to_question', () => {
     const errors = validateQuestions(
-      mc([{ choice: 0, action: 'skip_to_question', question: 2, message: 'nope' }]),
+      mcOf(2, [{ choice: 0, action: 'skip_to_question', question: 2, message: 'nope' }]),
     );
     expect(errors[0].message).toMatch(/end_test/);
   });
