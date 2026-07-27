@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
 
 ### Fixed
 - Sections whose `type` the API returns as `null` no longer render as
