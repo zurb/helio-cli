@@ -1,6 +1,46 @@
 # Changelog
 
-## 0.4.0 (unreleased)
+## Unreleased
+
+### Fixed
+- Sections whose `type` the API returns as `null` no longer render as
+  `[undefined]` in `tests order`, `tests preview`, `tests walkthrough`, and
+  participant journeys. They now read `[unknown type]`, so degraded upstream
+  data is not mistaken for a CLI bug. Any test containing a `click_test`
+  currently comes back this way from `GET /tests/:id`.
+
+### Changed
+- **Breaking (`--output json`):** `tests order` replaces the `blocks[].position`
+  field with two fields, because one number could not honestly serve both
+  purposes:
+  - `block_index` — 1-based position in the `--order` list.
+  - `question_number` — 1-based number of the first question the block covers,
+    matching `--position` and branching `question` targets.
+  - `question_count` — how many questions the block covers (>1 only for
+    multi-question metric blocks).
+
+  These diverge whenever a UX metric block spans more than one question. The
+  previous `position` field was the block index but was documented as matching
+  `--position`; that was wrong. Text output annotates only the blocks where the
+  two numberings actually part ways — `(Q3–Q4)` for a spanning metric, `(Q5)`
+  for a block whose question number has drifted from its index.
+- `add-question` no longer prints the API's `position` field in text mode when
+  appending. On the append path the API returns a screen-based number
+  (question number + 1, counting the intro card) that does not round-trip into
+  `--position`. `--output json` remains a faithful passthrough. Tracked
+  upstream against the helio API.
+
+### Known upstream issues
+- A single `click_test` section blanks `type`, `variations`, and `ux_metric`
+  for **every** section of a test in `GET /api/public/tests/:id`. `tests
+  preview` is unaffected (it reads `/report`). This supersedes the earlier
+  belief that UI-built or completed tests return degraded data — the predictor
+  is the click test, not the authoring surface.
+- `add_question` append returns a screen-based `position`, and
+  `--position = count + 1` clamps instead of appending, so "insert at the end"
+  is not expressible via an explicit position. Interior inserts are exact.
+
+## 0.4.0
 
 Requires the helio API changes merged in [helio #4995](https://github.com/zurb/helio/pull/4995)
 for the audience, click-test, and branching features; older servers ignore the
@@ -38,14 +78,11 @@ new params and 404 the new routes.
 - `tests preview` no longer labels the first question "Q0". The report
   serializer passes `section.position` through raw and platform storage is
   0-based, so questions are now numbered by sorted order.
-- `tests order --output json` reports 1-based `position` values matching the
-  `--position` flag, instead of leaking raw 0-based storage positions into
-  scripted input.
+- `tests order --output json` no longer leaks raw 0-based storage positions
+  into scripted input.
 
 ### Changed
-- Mutation responses' `position` field is now a 1-based question number
-  (matching the `--position` flag), so it round-trips safely. Raw `tests get`
-  section positions remain 0-based platform storage.
+- Raw `tests get` section positions remain 0-based platform storage.
 - `--dry-run` catches more branching errors before they reach the API:
   backward and self-targeting skips, skips past the last question, and
   `section_id` on create (the API takes question numbers only there, since

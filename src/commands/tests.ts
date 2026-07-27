@@ -281,7 +281,7 @@ export function resolveTestMeta(
   };
 }
 
-interface SectionData {
+export interface SectionData {
   id: string;
   type: string;
   position: number;
@@ -405,6 +405,70 @@ const TYPE_LABELS: Record<string, string> = {
   prototype_task: 'Prototype Task',
 };
 
+// The API can return a null/absent section `type` — notably for every section
+// of a test that contains a click_test (zurb/helio). Echoing that straight into
+// a label renders "[undefined]"/"[null]", which reads like a CLI bug rather
+// than missing upstream data, so name the condition instead.
+function typeLabel(type: string | null | undefined, fallback?: string | null): string {
+  if (type) return TYPE_LABELS[type] ?? type;
+  if (fallback) return TYPE_LABELS[fallback] ?? fallback;
+  return 'unknown type';
+}
+
+export interface OrderBlock {
+  key: string;
+  label: string;
+  /** 1-based question number of the FIRST question this block covers. */
+  question_number: number;
+  /** How many questions this block covers (>1 only for multi-question metrics). */
+  question_count: number;
+}
+
+/**
+ * Group a test's sections into reorderable blocks, collapsing all sections that
+ * share a ux_metric type into a single `metric:<type>` block.
+ *
+ * Blocks and questions are DIFFERENT numbering systems: a metric block is one
+ * block but may span several questions, so a block's index is NOT the question
+ * number that `--position` and branching `question` take. Callers must keep
+ * them distinct — block index drives `--order`, `question_number` is what a
+ * human acts on.
+ */
+export function buildOrderBlocks(rawSections: SectionData[]): OrderBlock[] {
+  const sections = [...rawSections].sort((a, b) => a.position - b.position);
+  const blocks: OrderBlock[] = [];
+  const seenMetrics = new Set<string>();
+
+  for (let qi = 0; qi < sections.length; qi++) {
+    const s = sections[qi];
+    const uxMetric = (s as Record<string, unknown>).ux_metric as { metric_type: string } | null;
+    if (uxMetric?.metric_type) {
+      const metricType = uxMetric.metric_type;
+      if (seenMetrics.has(metricType)) continue;
+      seenMetrics.add(metricType);
+      const count = sections.filter(sec => {
+        const m = (sec as Record<string, unknown>).ux_metric as { metric_type: string } | null;
+        return m?.metric_type === metricType;
+      }).length;
+      blocks.push({
+        key: `metric:${metricType}`,
+        label: `${metricType} metric (${count} question${count === 1 ? '' : 's'})`,
+        question_number: qi + 1,
+        question_count: count,
+      });
+    } else {
+      blocks.push({
+        key: `section:${s.id}`,
+        label: `[${typeLabel(s.type)}] ${s.stripped_instructions || s.instructions || ''}`.trim(),
+        question_number: qi + 1,
+        question_count: 1,
+      });
+    }
+  }
+
+  return blocks;
+}
+
 function formatStatus(status: string): string {
   const colors: Record<string, string> = {
     draft: '\x1b[33m',     // yellow
@@ -428,7 +492,7 @@ function printReportQuestions(questions: ReportQuestion[]): void {
   // Number by sorted order instead, matching printSectionQuestions.
   for (let i = 0; i < sorted.length; i++) {
     const q = sorted[i];
-    const label = TYPE_LABELS[q.type] ?? q.type;
+    const label = typeLabel(q.type);
     const countStr = q.response_count != null ? ` (${q.response_count} responses)` : '';
     console.log(`  \x1b[1mQ${i + 1}.\x1b[0m [${label}] ${q.question}${countStr}`);
 
@@ -464,7 +528,7 @@ function printSectionQuestions(sections: SectionData[]): void {
   const sorted = [...sections].sort((a, b) => a.position - b.position);
   for (let i = 0; i < sorted.length; i++) {
     const s = sorted[i];
-    const label = TYPE_LABELS[s.type] ?? s.type;
+    const label = typeLabel(s.type);
     const question = s.stripped_instructions || stripHtml(s.instructions || '');
     console.log(`  \x1b[1mQ${i + 1}.\x1b[0m [${label}] ${question}`);
 
@@ -1332,7 +1396,7 @@ export function buildWalkthroughScreens(test: TestShowResponse): WalkthroughScre
       position: screens.length + 1,
       q_number: qNumber,
       type: canonical,
-      type_label: TYPE_LABELS[s.type] ?? TYPE_LABELS[canonical] ?? canonical,
+      type_label: typeLabel(s.type, canonical),
       raw_type: s.type,
       question: s.stripped_instructions || stripHtml(s.instructions || ''),
       choices,
@@ -1576,7 +1640,7 @@ function renderParticipant(p: ReportParticipant, ordinal: number): string[] {
     lines.push('  \x1b[90m(no journey steps)\x1b[0m');
   }
   journey.forEach((step, i) => {
-    const label = TYPE_LABELS[step.question_type] ?? step.question_type;
+    const label = typeLabel(step.question_type);
     const metric = step.metric ? `  \x1b[90m⚲ ${step.metric}\x1b[0m` : '';
     lines.push(`  \x1b[1mQ${i + 1}.\x1b[0m [${label}]${metric}`);
 
@@ -2019,50 +2083,35 @@ export function registerTestsCommand(program: Command): void {
       withErrorHandling(async (id: string) => {
         const client = makeClient(program);
         const data = (await client.get(`tests/${id}`)) as { test: TestShowResponse };
-        const sections = (data.test.sections ?? []).sort((a, b) => a.position - b.position);
-
-        // Build block list: group consecutive ux_metric sections together
-        const blocks: { key: string; label: string }[] = [];
-        const seenMetrics = new Set<string>();
-
-        for (const s of sections) {
-          const uxMetric = (s as Record<string, unknown>).ux_metric as { metric_type: string } | null;
-          if (uxMetric?.metric_type) {
-            const metricType = uxMetric.metric_type;
-            if (!seenMetrics.has(metricType)) {
-              seenMetrics.add(metricType);
-              const metricSections = sections.filter(sec => {
-                const m = (sec as Record<string, unknown>).ux_metric as { metric_type: string } | null;
-                return m?.metric_type === metricType;
-              });
-              blocks.push({
-                key: `metric:${metricType}`,
-                label: `${metricType} metric (${metricSections.length} section${metricSections.length === 1 ? '' : 's'})`,
-              });
-            }
-          } else {
-            const typeLabel = TYPE_LABELS[s.type] ?? s.type;
-            blocks.push({
-              key: `section:${s.id}`,
-              label: `[${typeLabel}] ${s.stripped_instructions || s.instructions || ''}`.trim(),
-            });
-          }
-        }
+        const blocks = buildOrderBlocks(data.test.sections ?? []);
 
         if (isJsonMode()) {
           printJson({
             test_id: data.test.id,
             order: blocks.map(b => b.key),
-            // Re-indexed to the 1-based question numbers that --position and
-            // branching `question` take. Raw section.position is 0-based
-            // platform storage and must not leak into scripted input.
-            blocks: blocks.map((b, i) => ({ key: b.key, label: b.label, position: i + 1 })),
+            blocks: blocks.map((b, i) => ({
+              key: b.key,
+              label: b.label,
+              block_index: i + 1,
+              question_number: b.question_number,
+              question_count: b.question_count,
+            })),
           });
         } else {
           console.log(`\x1b[1m${data.test.name ?? id}\x1b[0m — current order:\n`);
           for (let i = 0; i < blocks.length; i++) {
-            console.log(`  ${i + 1}. ${blocks[i].key}`);
-            console.log(`     ${blocks[i].label}`);
+            const b = blocks[i];
+            // Only annotate where block numbering and question numbering
+            // actually part ways — otherwise the note is noise on every line.
+            const last = b.question_number + b.question_count - 1;
+            const qNote =
+              b.question_count > 1
+                ? `  \x1b[90m(Q${b.question_number}–Q${last})\x1b[0m`
+                : i + 1 !== b.question_number
+                  ? `  \x1b[90m(Q${b.question_number})\x1b[0m`
+                  : '';
+            console.log(`  ${i + 1}. ${b.key}${qNote}`);
+            console.log(`     ${b.label}`);
           }
           console.log(`\nTo reorder, pass --order with the block keys in your desired order:`);
           console.log(`  helio-cli tests reorder ${id} --order ${blocks.map(b => `"${b.key}"`).join(' ')}`);
@@ -2423,10 +2472,25 @@ export function registerTestsCommand(program: Command): void {
         const client = makeClient(program);
         const data = await client.post(`tests/${id}/questions/add_question`, question);
         if (isJsonMode()) {
+          // Faithful passthrough. Note that on the append path the API's
+          // `position` is screen-based (question number + 1, counting the
+          // intro card) and does NOT round-trip into --position. Tracked
+          // upstream in zurb/helio.
           printJson(data);
         } else {
           console.log(`\x1b[32m✓\x1b[0m Added ${cmdOpts.type} question to test ${id}`);
-          printKeyValue(data as Record<string, unknown>);
+          const shown = { ...(data as Record<string, unknown>) };
+          if (question.position == null && 'position' in shown) {
+            // Appending: suppress rather than print a number that looks like a
+            // --position value but isn't one.
+            delete shown.position;
+          }
+          printKeyValue(shown);
+          if (question.position == null) {
+            console.log(
+              `  \x1b[90mappended to the end — re-run \x1b[0mtests order\x1b[90m for question numbers\x1b[0m`,
+            );
+          }
         }
       }),
     );
