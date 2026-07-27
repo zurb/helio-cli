@@ -1495,7 +1495,7 @@ function interpretAnswer(screen: WalkthroughScreen, raw: string): { ok: true; di
   }
 }
 
-async function runInteractiveWalkthrough(meta: TestMeta, screens: WalkthroughScreen[]): Promise<void> {
+export async function runInteractiveWalkthrough(meta: TestMeta, screens: WalkthroughScreen[]): Promise<void> {
   const totalQuestions = screens.filter(s => s.kind === 'question').length;
   const answers = new Map<number, string>();
 
@@ -1553,7 +1553,7 @@ async function runInteractiveWalkthrough(meta: TestMeta, screens: WalkthroughScr
   }
 
   output.write('\x1b[2J\x1b[H');
-  printWalkthroughHeader(test, totalQuestions);
+  printWalkthroughHeader(meta, totalQuestions);
   printSeparator();
   console.log(' \x1b[1mWalkthrough complete (simulated — nothing was sent to Helio)\x1b[0m');
   printSeparator();
