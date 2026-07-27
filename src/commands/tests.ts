@@ -34,7 +34,7 @@ const QUESTION_TYPES = {
     creatable: true,
     also_accepts: 'MultipleChoice',
     required: ['type', 'instructions', 'choices'],
-    optional: ['allow_multiple', 'randomize_choices'],
+    optional: ['allow_multiple', 'randomize_choices', 'branching'],
     example: {
       type: 'multiple_choice',
       instructions: 'How did you hear about us?',
@@ -42,6 +42,8 @@ const QUESTION_TYPES = {
       allow_multiple: false,
       randomize_choices: false,
     },
+    notes:
+      'branching (single-select only, mutually exclusive with followup, requires a Helio Enterprise plan): [{choice: 0, action: "skip_to_question", question: 3}, {choice: 1, action: "end_test", message: "...", redirect_url: "..."}]. choice is a 0-based index; question is a 1-based question number and must be a LATER question (forward-only skips, matching the editor); on add/edit-question, section_id is also accepted (uuid or numeric id). end_test with message/redirect disqualifies with a custom end screen.',
     summary_fields: 'results: [{id, text, percent, count}]',
     response_fields: 'selected: [{id, text}], text (if follow-up)',
   },
@@ -138,7 +140,18 @@ const QUESTION_TYPES = {
   },
   click_test: {
     description: 'Click on an image to identify areas of interest',
-    creatable: false,
+    creatable: true,
+    also_accepts: 'ClickTest',
+    required: ['type', 'instructions', 'asset_id'],
+    optional: ['hotspots', 'site_link'],
+    example: {
+      type: 'click_test',
+      instructions: 'Where would you click to start a return?',
+      asset_id: 123,
+      hotspots: [{ name: 'Returns link', x: 0.1, y: 0.2, width: 0.3, height: 0.05, priority: 'Primary' }],
+    },
+    notes:
+      'asset_id is required (upload via `assets upload`). Omit hotspots for an engagement click test (heatmap only); include them for a success click test. Coordinates are relative (0-1). priority: Primary | Secondary | Tertiary (default Primary).',
     summary_fields: 'results: [{id, text, percent, count}]',
     response_fields: 'clicks: [{x, y}] (relative coordinates)',
   },
@@ -410,10 +423,14 @@ function stripHtml(html: string): string {
 
 function printReportQuestions(questions: ReportQuestion[]): void {
   const sorted = [...questions].sort((a, b) => a.position - b.position);
-  for (const q of sorted) {
+  // The report serializer passes section.position through raw, and platform
+  // storage is 0-based — printing it directly labels the first question "Q0".
+  // Number by sorted order instead, matching printSectionQuestions.
+  for (let i = 0; i < sorted.length; i++) {
+    const q = sorted[i];
     const label = TYPE_LABELS[q.type] ?? q.type;
     const countStr = q.response_count != null ? ` (${q.response_count} responses)` : '';
-    console.log(`  \x1b[1mQ${q.position}.\x1b[0m [${label}] ${q.question}${countStr}`);
+    console.log(`  \x1b[1mQ${i + 1}.\x1b[0m [${label}] ${q.question}${countStr}`);
 
     const results = q.results as Record<string, unknown>[] | undefined;
 
@@ -555,6 +572,8 @@ interface QuestionInput {
   can_skip_cards?: boolean;
   position?: number;
   followup?: FollowupInput;
+  hotspots?: unknown[];
+  branching?: unknown[];
   [key: string]: unknown;
 }
 
@@ -594,7 +613,16 @@ const TYPE_ALIASES: Record<string, string> = {
   CardSort: 'card_sort',
   PointAllocation: 'point_allocation',
   MaxDiff: 'max_diff',
+  ClickTest: 'click_test',
 };
+
+const HOTSPOT_PRIORITIES = ['Primary', 'Secondary', 'Tertiary'];
+
+const BRANCH_ACTIONS = ['skip_to_question', 'end_test'];
+
+// Read-only model attrs leaked by GET responses; the API rejects them on
+// write, so fail fast client-side with the correct shape.
+const LEGACY_FOLLOWUP_KEYS = ['enable_followup', 'followup_question', 'followup_required', 'choice_required_followup'];
 
 const VALID_SCALE_TYPES = [
   'agreement', 'occurrence', 'importance', 'quality', 'comprehension',
@@ -741,7 +769,14 @@ function validateStringItems(items: unknown[], field: string, questionNum: numbe
   }
 }
 
-export function validateQuestions(questions: unknown): ValidationError[] {
+// `standalone` marks a single question being added or edited on an existing
+// test, where the array index says nothing about the question's real number.
+// Forward-only branching can only be checked when that number is known — from
+// the array position on create, or an explicit --position on add-question.
+export function validateQuestions(
+  questions: unknown,
+  opts: { standalone?: boolean } = {},
+): ValidationError[] {
   const errors: ValidationError[] = [];
 
   if (!Array.isArray(questions)) {
@@ -797,6 +832,17 @@ export function validateQuestions(questions: unknown): ValidationError[] {
     // Instructions validation
     if (!q.instructions || typeof q.instructions !== 'string' || !q.instructions.trim()) {
       errors.push({ question: num, field: 'instructions', message: 'Required (non-empty string)' });
+    }
+
+    // Legacy followup attrs copied from GET responses don't work on write
+    for (const key of LEGACY_FOLLOWUP_KEYS) {
+      if (key in q) {
+        errors.push({
+          question: num,
+          field: key,
+          message: 'Read-only report field. Use followup: {"question": "...", "required": true, "for_choices": [0]} instead',
+        });
+      }
     }
 
     // Type-specific validation
@@ -935,9 +981,191 @@ export function validateQuestions(questions: unknown): ValidationError[] {
         validateStringItems(q.choices, 'choices', num, errors);
       }
     }
+
+    if (q.branching !== undefined) {
+      const ownNumber = opts.standalone
+        ? typeof q.position === 'number'
+          ? q.position
+          : undefined
+        : num;
+      validateBranching(q, num, errors, {
+        ownNumber,
+        // On create, questions are identified by number only and the whole set
+        // is known, so both ends of the valid target range are checkable.
+        totalQuestions: opts.standalone ? undefined : questions.length,
+        allowSectionId: opts.standalone === true,
+      });
+    }
+
+    if (canonical === 'click_test') {
+      if (q.asset_id === undefined || q.asset_id === null || q.asset_id === '') {
+        errors.push({
+          question: num,
+          field: 'asset_id',
+          message: 'Required: image asset id (upload via `assets upload`)',
+        });
+      }
+      if (q.hotspots !== undefined) {
+        if (!Array.isArray(q.hotspots)) {
+          errors.push({ question: num, field: 'hotspots', message: 'Must be an array of hotspot objects' });
+        } else {
+          for (let h = 0; h < q.hotspots.length; h++) {
+            const hotspot = q.hotspots[h] as Record<string, unknown>;
+            if (!hotspot || typeof hotspot !== 'object' || Array.isArray(hotspot)) {
+              errors.push({ question: num, field: `hotspots[${h}]`, message: 'Must be an object' });
+              continue;
+            }
+            for (const key of ['x', 'y', 'width', 'height']) {
+              const value = hotspot[key];
+              if (typeof value !== 'number') {
+                errors.push({
+                  question: num,
+                  field: `hotspots[${h}].${key}`,
+                  message: 'Required: number relative to the image (0-1)',
+                });
+              } else if (key === 'x' || key === 'y' ? value < 0 || value > 1 : value <= 0 || value > 1) {
+                errors.push({
+                  question: num,
+                  field: `hotspots[${h}].${key}`,
+                  message: key === 'x' || key === 'y' ? 'Must be between 0 and 1' : 'Must be greater than 0 and at most 1',
+                });
+              }
+            }
+            if (hotspot.priority !== undefined && !HOTSPOT_PRIORITIES.includes(hotspot.priority as string)) {
+              errors.push({
+                question: num,
+                field: `hotspots[${h}].priority`,
+                message: `Must be one of: ${HOTSPOT_PRIORITIES.join(', ')}`,
+              });
+            }
+          }
+        }
+      }
+    }
   }
 
   return errors;
+}
+
+interface BranchingContext {
+  ownNumber?: number;
+  totalQuestions?: number;
+  allowSectionId: boolean;
+}
+
+function validateBranching(
+  q: QuestionInput,
+  num: number,
+  errors: ValidationError[],
+  ctx: BranchingContext,
+): void {
+  const { ownNumber, totalQuestions, allowSectionId } = ctx;
+  const canonical = TYPE_ALIASES[q.type ?? ''] ?? q.type;
+  if (canonical !== 'multiple_choice') {
+    errors.push({ question: num, field: 'branching', message: 'Only supported on multiple_choice questions' });
+    return;
+  }
+  if (q.allow_multiple === true) {
+    errors.push({ question: num, field: 'branching', message: 'Requires single-select (remove allow_multiple)' });
+    return;
+  }
+  if (q.followup !== undefined) {
+    errors.push({ question: num, field: 'branching', message: 'Branching and followup are mutually exclusive' });
+    return;
+  }
+  if (!Array.isArray(q.branching)) {
+    errors.push({ question: num, field: 'branching', message: 'Must be an array of branch objects' });
+    return;
+  }
+
+  const choicesCount = Array.isArray(q.choices) ? q.choices.length : 0;
+  const seen = new Set<number>();
+  for (let b = 0; b < q.branching.length; b++) {
+    const entry = q.branching[b] as Record<string, unknown>;
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      errors.push({ question: num, field: `branching[${b}]`, message: 'Must be an object' });
+      continue;
+    }
+    const choice = entry.choice;
+    if (typeof choice !== 'number' || choice < 0 || choice >= choicesCount) {
+      errors.push({
+        question: num,
+        field: `branching[${b}].choice`,
+        message: `Must be a 0-based choice index (0-${choicesCount - 1})`,
+      });
+    } else if (seen.has(choice)) {
+      errors.push({ question: num, field: `branching[${b}].choice`, message: `Duplicate branch for choice ${choice}` });
+    } else {
+      seen.add(choice);
+    }
+
+    if (!BRANCH_ACTIONS.includes(entry.action as string)) {
+      errors.push({
+        question: num,
+        field: `branching[${b}].action`,
+        message: `Must be one of: ${BRANCH_ACTIONS.join(', ')}`,
+      });
+      continue;
+    }
+    if (entry.action === 'skip_to_question') {
+      const hasQuestion = entry.question !== undefined;
+      const hasSectionId = entry.section_id !== undefined;
+      if (hasSectionId && !allowSectionId) {
+        // Sections don't exist yet at create time, so the API takes question
+        // numbers only there.
+        errors.push({
+          question: num,
+          field: `branching[${b}].section_id`,
+          message: 'Use question numbers (not section_id) when creating a test',
+        });
+      } else if (hasQuestion === hasSectionId) {
+        errors.push({
+          question: num,
+          field: `branching[${b}]`,
+          message: allowSectionId
+            ? 'skip_to_question needs exactly one of question (1-based number) or section_id'
+            : 'skip_to_question needs a question (1-based number)',
+        });
+      } else if (hasQuestion && (typeof entry.question !== 'number' || entry.question < 1)) {
+        errors.push({
+          question: num,
+          field: `branching[${b}].question`,
+          message: 'Must be a positive 1-based question number',
+        });
+      } else if (hasQuestion && ownNumber !== undefined && (entry.question as number) <= ownNumber) {
+        const upper = totalQuestions !== undefined ? `${ownNumber + 1}-${totalQuestions}` : `after ${ownNumber}`;
+        errors.push({
+          question: num,
+          field: `branching[${b}].question`,
+          message: `Skips are forward-only: must target a later question (${upper}), got ${entry.question}`,
+        });
+      } else if (
+        hasQuestion &&
+        totalQuestions !== undefined &&
+        (entry.question as number) > totalQuestions
+      ) {
+        errors.push({
+          question: num,
+          field: `branching[${b}].question`,
+          message: `No question ${entry.question} — this test has ${totalQuestions}`,
+        });
+      }
+      if (entry.message !== undefined || entry.redirect_url !== undefined) {
+        errors.push({
+          question: num,
+          field: `branching[${b}]`,
+          message: 'message/redirect_url only apply to end_test',
+        });
+      }
+    }
+    if (entry.action === 'end_test' && (entry.question !== undefined || entry.section_id !== undefined)) {
+      errors.push({
+        question: num,
+        field: `branching[${b}]`,
+        message: 'question/section_id only apply to skip_to_question',
+      });
+    }
+  }
 }
 
 function parseFollowupForChoices(items: string[] | undefined): number[] | undefined {
@@ -1794,7 +2022,7 @@ export function registerTestsCommand(program: Command): void {
         const sections = (data.test.sections ?? []).sort((a, b) => a.position - b.position);
 
         // Build block list: group consecutive ux_metric sections together
-        const blocks: { key: string; label: string; position: number }[] = [];
+        const blocks: { key: string; label: string }[] = [];
         const seenMetrics = new Set<string>();
 
         for (const s of sections) {
@@ -1810,7 +2038,6 @@ export function registerTestsCommand(program: Command): void {
               blocks.push({
                 key: `metric:${metricType}`,
                 label: `${metricType} metric (${metricSections.length} section${metricSections.length === 1 ? '' : 's'})`,
-                position: s.position,
               });
             }
           } else {
@@ -1818,7 +2045,6 @@ export function registerTestsCommand(program: Command): void {
             blocks.push({
               key: `section:${s.id}`,
               label: `[${typeLabel}] ${s.stripped_instructions || s.instructions || ''}`.trim(),
-              position: s.position,
             });
           }
         }
@@ -1827,7 +2053,10 @@ export function registerTestsCommand(program: Command): void {
           printJson({
             test_id: data.test.id,
             order: blocks.map(b => b.key),
-            blocks: blocks.map(b => ({ key: b.key, label: b.label, position: b.position })),
+            // Re-indexed to the 1-based question numbers that --position and
+            // branching `question` take. Raw section.position is 0-based
+            // platform storage and must not leak into scripted input.
+            blocks: blocks.map((b, i) => ({ key: b.key, label: b.label, position: i + 1 })),
           });
         } else {
           console.log(`\x1b[1m${data.test.name ?? id}\x1b[0m — current order:\n`);
@@ -2047,6 +2276,18 @@ export function registerTestsCommand(program: Command): void {
               summary.ux_metric_context = cmdOpts.uxMetricContext;
             }
           }
+          // Gates the CLI can't check locally, so a clean dry-run can still
+          // 400 on create. Called out here rather than discovered at send.
+          const warnings: string[] = [];
+          if (questions && (questions as QuestionInput[]).some(q => q.branching !== undefined)) {
+            warnings.push(
+              'Branching requires a Helio Enterprise account. Validation cannot see your plan, so this may still fail with a 400 on create.',
+            );
+          }
+          if (warnings.length > 0) {
+            summary.warnings = warnings;
+          }
+
           if (isJsonMode()) {
             printJson(summary);
           } else {
@@ -2089,6 +2330,9 @@ export function registerTestsCommand(program: Command): void {
                 }
               }
             }
+            for (const w of warnings) {
+              console.log(`\n  \x1b[33m⚠\x1b[0m ${w}`);
+            }
             console.log(`\nRun without --dry-run to create the test.`);
           }
           return;
@@ -2119,7 +2363,7 @@ export function registerTestsCommand(program: Command): void {
   cmd
     .command('add-question <id>')
     .description('Add a question to an existing draft test')
-    .requiredOption('--type <type>', 'Question type: free_response, multiple_choice, likert, nps, ranking, preference, matrix, card_sort, point_allocation, max_diff')
+    .requiredOption('--type <type>', 'Question type: free_response, multiple_choice, likert, nps, ranking, preference, matrix, card_sort, point_allocation, max_diff, click_test')
     .requiredOption('--instructions <text>', 'Question text')
     .option('--choices <items...>', 'Choices (for multiple_choice, ranking, preference, matrix, card_sort, point_allocation, max_diff)')
     .option('--scale-type <scale>', 'Scale type (for likert)')
@@ -2131,8 +2375,10 @@ export function registerTestsCommand(program: Command): void {
     .option('--points-label <label>', 'Label for points (for point_allocation)')
     .option('--random-category-order', 'Randomize category order (for card_sort)')
     .option('--can-skip-cards', 'Allow skipping cards (for card_sort)')
-    .option('--asset-id <id>', 'Asset ID (for free_response stimulus)')
+    .option('--asset-id <id>', 'Asset ID (stimulus image; required for click_test)')
     .option('--site-link <url>', 'Site link URL (for free_response stimulus)')
+    .option('--hotspots <json>', 'Hotspots as JSON array or @path/to/file.json (for click_test): [{name?, x, y, width, height, priority?}]')
+    .option('--branching <json>', 'Branching as JSON array or @file (single-select multiple_choice; requires a Helio Enterprise account): [{choice, action: skip_to_question|end_test, question?|section_id?, message?, redirect_url?}]. Skips are forward-only.')
     .option('--position <n>', 'Insert at this 1-based position (appends if omitted)')
     .option('--followup <text>', 'Follow-up question text')
     .option('--followup-required', 'Mark the follow-up as required')
@@ -2156,13 +2402,15 @@ export function registerTestsCommand(program: Command): void {
         if (cmdOpts.canSkipCards) question.can_skip_cards = true;
         if (cmdOpts.assetId) question.asset_id = cmdOpts.assetId;
         if (cmdOpts.siteLink) question.site_link = cmdOpts.siteLink;
+        if (cmdOpts.hotspots) question.hotspots = parseJsonOrFile(cmdOpts.hotspots) as unknown[];
+        if (cmdOpts.branching) question.branching = parseJsonOrFile(cmdOpts.branching) as unknown[];
         if (cmdOpts.position) question.position = parsePositiveInt(cmdOpts.position, '--position');
         const followup = buildFollowupFromFlags(cmdOpts);
         assertFollowupChoicesInRange(followup, question.choices);
         if (followup) question.followup = followup;
 
         // Validate the single question
-        const errors = validateQuestions([question]);
+        const errors = validateQuestions([question], { standalone: true });
         if (errors.length > 0) {
           if (isJsonMode()) {
             printJson({ valid: false, errors });
@@ -2201,6 +2449,8 @@ export function registerTestsCommand(program: Command): void {
     .option('--can-skip-cards', 'Allow skipping cards')
     .option('--asset-id <id>', 'Asset ID (stimulus image)')
     .option('--site-link <url>', 'Site link URL (stimulus)')
+    .option('--hotspots <json>', 'Hotspots as JSON array or @path/to/file.json (for click_test): [{name?, x, y, width, height, priority?}]')
+    .option('--branching <json>', 'Branching as JSON array or @file (single-select multiple_choice; requires a Helio Enterprise account): [{choice, action: skip_to_question|end_test, question?|section_id?, message?, redirect_url?}]. Skips are forward-only.')
     .option('--followup <text>', 'Follow-up question text')
     .option('--followup-required', 'Mark the follow-up as required')
     .option('--followup-for-choices <positions...>', '0-based choice positions that trigger the follow-up')
@@ -2229,6 +2479,8 @@ export function registerTestsCommand(program: Command): void {
         if (cmdOpts.canSkipCards) question.can_skip_cards = true;
         if (cmdOpts.assetId) question.asset_id = cmdOpts.assetId;
         if (cmdOpts.siteLink) question.site_link = cmdOpts.siteLink;
+        if (cmdOpts.hotspots) question.hotspots = parseJsonOrFile(cmdOpts.hotspots) as unknown[];
+        if (cmdOpts.branching) question.branching = parseJsonOrFile(cmdOpts.branching) as unknown[];
         if (cmdOpts.removeFollowup) {
           question.followup = { remove: true };
         } else {
@@ -2242,7 +2494,7 @@ export function registerTestsCommand(program: Command): void {
           if (!question.instructions) {
             throw new Error('--instructions is required when --type is provided.');
           }
-          const errors = validateQuestions([question]);
+          const errors = validateQuestions([question], { standalone: true });
           if (errors.length > 0) {
             if (isJsonMode()) {
               printJson({ valid: false, errors });
@@ -2262,6 +2514,8 @@ export function registerTestsCommand(program: Command): void {
             ['points_label', '--points-label'],
             ['random_category_order', '--random-category-order'],
             ['can_skip_cards', '--can-skip-cards'],
+            ['hotspots', '--hotspots'],
+            ['branching', '--branching'],
           ];
           const present = structuralFlags
             .filter(([key]) => (question as Record<string, unknown>)[key] !== undefined)
@@ -2400,11 +2654,27 @@ export function registerTestsCommand(program: Command): void {
         }
 
         const client = makeClient(program);
+
+        // Removing sections resets any branch pointing into them, server-side
+        // and silently. Warn first so the loss is visible to the caller.
+        let branchingReset = false;
+        try {
+          const show = (await client.get(`tests/${id}`)) as { test: Record<string, unknown> };
+          branchingReset = show.test?.has_branching === true;
+        } catch {
+          // Non-fatal: the removal itself is the operation that matters.
+        }
+
         const data = await client.patch(`tests/${id}`, { remove_ux_metrics: metrics });
         if (isJsonMode()) {
-          printJson(data);
+          printJson(branchingReset ? { ...(data as object), branching_reset: true } : data);
         } else {
           console.log(`\x1b[32m✓\x1b[0m Removed UX metrics from test ${id}: ${metrics.join(', ')}`);
+          if (branchingReset) {
+            console.log(
+              `  \x1b[33m⚠\x1b[0m This test had branching. Branches targeting removed sections were reset — re-check with \x1b[1mtests get ${id}\x1b[0m.`,
+            );
+          }
           printKeyValue(data as Record<string, unknown>);
         }
       }),
@@ -2413,7 +2683,7 @@ export function registerTestsCommand(program: Command): void {
   cmd
     .command('reorder <id>')
     .description('Reorder questions and UX metric groups on a draft test')
-    .requiredOption('--order <blocks...>', 'Ordered block references: "section:<uuid>" or "metric:<type>"')
+    .requiredOption('--order <blocks...>', 'Ordered block references: "section:<uuid-or-id>" or "metric:<type>"')
     .action(
       withErrorHandling(async (id: string, cmdOpts) => {
         const order: string[] = cmdOpts.order;
@@ -2426,7 +2696,7 @@ export function registerTestsCommand(program: Command): void {
             errors.push({
               question: 0,
               field: `order[${i}]`,
-              message: `Invalid block "${entry}". Must be "section:<uuid>" or "metric:<type>"`,
+              message: `Invalid block "${entry}". Must be "section:<uuid-or-id>" or "metric:<type>"`,
             });
           }
         }
@@ -2539,6 +2809,30 @@ export function registerTestsCommand(program: Command): void {
         } else {
           console.log(`\x1b[32m✓\x1b[0m Test updated`);
           printKeyValue(data as Record<string, unknown>);
+        }
+      }),
+    );
+
+  cmd
+    .command('clone <id>')
+    .description('Clone a test into a new draft (copies questions, UX metrics, branching, and audience)')
+    .action(
+      withErrorHandling(async (id: string) => {
+        const client = makeClient(program);
+        const data = (await client.post(`tests/${id}/clone`)) as {
+          test_id: string;
+          source_test_id: string;
+          name: string;
+          status: string;
+          project_id: string | null;
+          question_count: number;
+          preview_test_url: string;
+        };
+        if (isJsonMode()) {
+          printJson(data);
+        } else {
+          console.log(`\x1b[32m✓\x1b[0m Cloned test ${data.source_test_id}`);
+          printKeyValue(data as unknown as Record<string, unknown>);
         }
       }),
     );

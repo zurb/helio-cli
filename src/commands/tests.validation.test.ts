@@ -47,7 +47,7 @@ describe('validateQuestions — top-level shape', () => {
   });
 
   it('rejects non-creatable types with a UI-only message', () => {
-    for (const type of ['click_test', 'tree_test', 'prototype_task']) {
+    for (const type of ['tree_test', 'prototype_task']) {
       const errors = validateQuestions(q({ type }));
       expect(errors[0].message).toMatch(/only be created via the UI/);
     }
@@ -177,6 +177,193 @@ describe('validateQuestions — free_response and nps', () => {
 
   it('nps needs only type + instructions', () => {
     expect(validateQuestions(q({ type: 'nps' }))).toEqual([]);
+  });
+});
+
+// ─── validateQuestions: legacy followup keys ─────────────────────────────────
+
+describe('validateQuestions — legacy followup keys', () => {
+  it('rejects enable_followup / followup_question / followup_required with a pointer to the followup object', () => {
+    const errors = validateQuestions(
+      q({ type: 'nps', enable_followup: true, followup_question: 'Why?', followup_required: false }),
+    );
+    expect(fields(errors)).toEqual(['enable_followup', 'followup_question', 'followup_required']);
+    expect(errors[0].message).toMatch(/followup: \{/);
+  });
+
+  it('accepts the followup object form', () => {
+    const errors = validateQuestions(q({ type: 'nps', followup: { question: 'Why?', required: true } }));
+    expect(errors).toEqual([]);
+  });
+});
+
+// ─── validateQuestions: branching ────────────────────────────────────────────
+
+describe('validateQuestions — branching', () => {
+  const mc = (branching: unknown, extra: Record<string, unknown> = {}) =>
+    q({ type: 'multiple_choice', choices: ['Yes', 'No'], branching, ...extra });
+
+  // A create payload where the branching question is Q1, followed by enough
+  // filler that a forward skip has somewhere to land.
+  const mcOf = (total: number, branching: unknown, extra: Record<string, unknown> = {}) => [
+    { instructions: 'Valid instructions', type: 'multiple_choice', choices: ['Yes', 'No'], branching, ...extra },
+    ...Array.from({ length: total - 1 }, (_, i) => ({ instructions: `Filler ${i + 1}`, type: 'nps' })),
+  ];
+
+  it('accepts skip and end_test branches on single-select multiple choice', () => {
+    const errors = validateQuestions(
+      mcOf(3, [
+        { choice: 0, action: 'skip_to_question', question: 3 },
+        { choice: 1, action: 'end_test', message: 'Not a fit' },
+      ]),
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it('accepts section_id as a skip target on add/edit, but not on create', () => {
+    const branching = [{ choice: 0, action: 'skip_to_question', section_id: 'abc' }];
+    expect(validateQuestions(mc(branching), { standalone: true })).toEqual([]);
+    expect(fields(validateQuestions(mc(branching)))).toEqual(['branching[0].section_id']);
+  });
+
+  it('rejects backward and self-targeting skips on create', () => {
+    const back = validateQuestions(
+      mcOf(4, [{ choice: 0, action: 'skip_to_question', question: 1 }]).reverse(),
+    );
+    // Q4 is the branching question after reverse(); targeting Q1 goes backward.
+    expect(back.map(e => e.field)).toContain('branching[0].question');
+    expect(back[0].message).toMatch(/forward-only/);
+
+    const self = validateQuestions(mcOf(3, [{ choice: 0, action: 'skip_to_question', question: 1 }]));
+    expect(self[0].message).toMatch(/forward-only/);
+  });
+
+  it('rejects skips past the end of the test on create', () => {
+    const errors = validateQuestions(mcOf(2, [{ choice: 0, action: 'skip_to_question', question: 9 }]));
+    expect(fields(errors)).toEqual(['branching[0].question']);
+    expect(errors[0].message).toMatch(/this test has 2/);
+  });
+
+  it('skips the forward-only check on add/edit when position is unknown', () => {
+    const branching = [{ choice: 0, action: 'skip_to_question', question: 2 }];
+    expect(validateQuestions(mc(branching), { standalone: true })).toEqual([]);
+    // With an explicit --position, the check applies again.
+    const errors = validateQuestions(mc(branching, { position: 5 }), { standalone: true });
+    expect(errors[0].message).toMatch(/forward-only/);
+  });
+
+  it('rejects branching on non-multiple-choice questions', () => {
+    const errors = validateQuestions(q({ type: 'nps', branching: [{ choice: 0, action: 'end_test' }] }));
+    expect(fields(errors)).toEqual(['branching']);
+  });
+
+  it('rejects branching with allow_multiple', () => {
+    const errors = validateQuestions(mc([{ choice: 0, action: 'end_test' }], { allow_multiple: true }));
+    expect(errors[0].message).toMatch(/single-select/);
+  });
+
+  it('rejects branching combined with followup', () => {
+    const errors = validateQuestions(
+      mc([{ choice: 0, action: 'end_test' }], { followup: { question: 'Why?' } }),
+    );
+    expect(errors[0].message).toMatch(/mutually exclusive/);
+  });
+
+  it('rejects out-of-range and duplicate choice indexes', () => {
+    const errors = validateQuestions(
+      mc([
+        { choice: 5, action: 'end_test' },
+        { choice: 0, action: 'end_test' },
+        { choice: 0, action: 'end_test' },
+      ]),
+    );
+    expect(fields(errors)).toEqual(['branching[0].choice', 'branching[2].choice']);
+  });
+
+  it('rejects unknown actions', () => {
+    const errors = validateQuestions(mc([{ choice: 0, action: 'teleport' }]));
+    expect(fields(errors)).toEqual(['branching[0].action']);
+  });
+
+  it('requires exactly one of question or section_id on skip_to_question', () => {
+    expect(fields(validateQuestions(mc([{ choice: 0, action: 'skip_to_question' }])))).toEqual(['branching[0]']);
+    expect(
+      fields(
+        validateQuestions(mc([{ choice: 0, action: 'skip_to_question', question: 2, section_id: 'x' }]), {
+          standalone: true,
+        }),
+      ),
+    ).toEqual(['branching[0]']);
+  });
+
+  it('rejects message/redirect on skip_to_question', () => {
+    const errors = validateQuestions(
+      mcOf(2, [{ choice: 0, action: 'skip_to_question', question: 2, message: 'nope' }]),
+    );
+    expect(errors[0].message).toMatch(/end_test/);
+  });
+
+  it('rejects stray question/section_id on end_test', () => {
+    const errors = validateQuestions(mc([{ choice: 0, action: 'end_test', question: 3 }]));
+    expect(fields(errors)).toEqual(['branching[0]']);
+    expect(errors[0].message).toMatch(/skip_to_question/);
+  });
+});
+
+// ─── validateQuestions: click_test ───────────────────────────────────────────
+
+describe('validateQuestions — click_test', () => {
+  it('accepts an engagement click test (asset only, no hotspots)', () => {
+    expect(validateQuestions(q({ type: 'click_test', asset_id: 123 }))).toEqual([]);
+  });
+
+  it('accepts ClickTest as an alias', () => {
+    expect(validateQuestions(q({ type: 'ClickTest', asset_id: 123 }))).toEqual([]);
+  });
+
+  it('accepts hotspots with valid relative coordinates', () => {
+    const errors = validateQuestions(
+      q({
+        type: 'click_test',
+        asset_id: 123,
+        hotspots: [
+          { name: 'CTA', x: 0.1, y: 0.2, width: 0.3, height: 0.05 },
+          { x: 0.5, y: 0.5, width: 0.1, height: 0.1, priority: 'Secondary' },
+        ],
+      }),
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it('requires asset_id', () => {
+    const errors = validateQuestions(q({ type: 'click_test' }));
+    expect(fields(errors)).toEqual(['asset_id']);
+  });
+
+  it('rejects non-array hotspots', () => {
+    const errors = validateQuestions(q({ type: 'click_test', asset_id: 1, hotspots: { x: 0.1 } }));
+    expect(fields(errors)).toEqual(['hotspots']);
+  });
+
+  it('requires numeric x/y/width/height on each hotspot', () => {
+    const errors = validateQuestions(
+      q({ type: 'click_test', asset_id: 1, hotspots: [{ x: 0.1, y: 0.2 }] }),
+    );
+    expect(fields(errors)).toEqual(['hotspots[0].width', 'hotspots[0].height']);
+  });
+
+  it('rejects out-of-range coordinates and zero dimensions', () => {
+    const errors = validateQuestions(
+      q({ type: 'click_test', asset_id: 1, hotspots: [{ x: 1.5, y: 0.2, width: 0, height: 0.1 }] }),
+    );
+    expect(fields(errors)).toEqual(['hotspots[0].x', 'hotspots[0].width']);
+  });
+
+  it('rejects invalid priority', () => {
+    const errors = validateQuestions(
+      q({ type: 'click_test', asset_id: 1, hotspots: [{ x: 0.1, y: 0.2, width: 0.1, height: 0.1, priority: 'Urgent' }] }),
+    );
+    expect(fields(errors)).toEqual(['hotspots[0].priority']);
   });
 });
 
