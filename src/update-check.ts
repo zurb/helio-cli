@@ -3,7 +3,6 @@ import { spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CONFIG_DIR } from './config.js';
-import { isJsonMode } from './output.js';
 
 const CACHE_FILE = join(CONFIG_DIR, 'update-check.json');
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
@@ -94,18 +93,29 @@ export function shouldCheckForUpdate(
   return !cache.lastCheckedAt || now - cache.lastCheckedAt >= intervalMs;
 }
 
-function inCI(): boolean {
-  const ci = process.env.CI;
-  return ci !== undefined && ci !== '' && ci !== 'false' && ci !== '0';
+function envFlagSet(value: string | undefined): boolean {
+  return value !== undefined && value !== '' && value !== 'false' && value !== '0';
 }
 
+function inCI(): boolean {
+  return envFlagSet(process.env.CI);
+}
+
+/**
+ * Only the deliberate opt-outs suppress the check.
+ *
+ * The notice goes to stderr exclusively, so `--output json` (stdout) stays
+ * parseable and a non-TTY stderr is just a pipe or a log file. Suppressing on
+ * either of those hid the notice from exactly the callers that most need it —
+ * scripts and agents, which pass `--output json` and never have a TTY, and so
+ * ran stale binaries indefinitely while reporting their version's capability
+ * ceiling as permanent fact. See issue #18.
+ *
+ * `HELIO_NO_UPDATE_CHECK` accepts any truthy value, not just `1`, since it is
+ * now the only way to turn the notice off.
+ */
 export function updateCheckDisabled(): boolean {
-  return (
-    process.env.HELIO_NO_UPDATE_CHECK === '1' ||
-    inCI() ||
-    isJsonMode() ||
-    !process.stderr.isTTY
-  );
+  return envFlagSet(process.env.HELIO_NO_UPDATE_CHECK) || inCI();
 }
 
 export async function fetchLatestVersion(
@@ -124,10 +134,17 @@ export async function fetchLatestVersion(
   }
 }
 
-export function formatUpdateNotice(current: string, latest: string): string {
+export function formatUpdateNotice(
+  current: string,
+  latest: string,
+  // The notice now reaches pipes and log files, where escape codes are noise.
+  color: boolean = process.stderr.isTTY === true,
+): string {
+  const label = color ? '\x1b[33mUpdate available:\x1b[0m' : 'Update available:';
   return (
-    `\n\x1b[33mUpdate available:\x1b[0m helio-cli ${current} → ${latest}\n` +
-    `Run \`helio-cli update\` (or \`npm install -g ${PACKAGE_NAME}@latest\`)`
+    `\n${label} helio-cli ${current} → ${latest}\n` +
+    `Run \`helio-cli update\` (or \`npm install -g ${PACKAGE_NAME}@latest\`)\n` +
+    `Silence this notice with HELIO_NO_UPDATE_CHECK=1`
   );
 }
 
@@ -165,8 +182,6 @@ export function startUpdateCheck(
   }
 
   return () => {
-    // Re-check: JSON mode may only have been detected during argument parsing.
-    if (updateCheckDisabled()) return;
     const { latestVersion } = readUpdateCache(cacheFile);
     if (latestVersion && isNewerVersion(latestVersion, currentVersion)) {
       process.stderr.write(formatUpdateNotice(currentVersion, latestVersion) + '\n');

@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- The "update available" notice is no longer suppressed by `--output json` or by
+  a non-TTY stderr. Those two conditions describe every scripted and agent-driven
+  session, so the callers least able to notice a stale binary were the only ones
+  guaranteed never to be told — and they went on reporting their own version's
+  capability ceiling as a permanent limit of the tool. The notice has always gone
+  to stderr only, so `--output json` on stdout stays parseable either way. Only
+  `HELIO_NO_UPDATE_CHECK` and `CI` suppress it now. ([#18](https://github.com/zurb/helio-cli/issues/18))
+
+### Changed
+- The update notice omits ANSI color codes when stderr is not a TTY, and names
+  `HELIO_NO_UPDATE_CHECK=1` as the way to silence it.
+- `HELIO_NO_UPDATE_CHECK` accepts any truthy value rather than the literal `1`
+  only (`0`, `false`, and empty still mean "keep checking"), matching how `CI` is
+  already read. It is now the only way to opt out, so it should not be
+  fussy about spelling.
+
 ## 0.5.0
 
 ### Fixed
