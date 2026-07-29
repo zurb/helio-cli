@@ -19,16 +19,26 @@
     --ux-metric-context "the signup flow"` and keeps only a genuinely custom
     free-response question. The hand-written NPS is gone.
   - The UX-metrics block moved above the `add-question` examples, which are now
-    framed as "for what the metrics don't cover" and carry a
-    metric-territory check. The `likert` example no longer restates
-    usefulness/satisfaction.
+    framed as "for what the metrics don't cover". The `likert` example no
+    longer restates usefulness/satisfaction.
+  - The bare list of metric names is now an eleven-line list of what each metric
+    already asks, at the point where you pick them. A short "metric territory"
+    list would have read as exhaustive and sent anyone whose question wasn't on
+    it straight back to hand-writing. "Genuinely custom" is defined positively
+    instead: your own domain, or a type no metric emits (`ranking`, `matrix`,
+    `card_sort`, `point_allocation`, `max_diff`).
   - Added empirical starting stacks (first look → `comprehension desirability
     intent`; findability → `success sentiment effort`; flow iteration →
-    `expectations success sentiment`), each flagged where a metric is a click
-    test / prototype composite the CLI rejects.
+    `expectations success sentiment`), flagging which members are web-app only.
+  - Corrected why the seven excluded metrics are excluded. They are rejected by
+    the Public API, not only client-side. `engagement`/`success`/`usability`
+    build click-test sections, `completion`/`effort` build Figma-prototype
+    directives, `satisfaction` is click test + Likert — but `brand_score` is
+    none of those; it is a fixed brand composite whose scoring depends on
+    choice flags the create path cannot set.
   - JSON guide gains `metrics_first`, `ux_metrics.why_metrics_first`,
-    `ux_metrics.metric_territory`, `ux_metrics.starting_stacks`, and
-    `commands.tests.create.recommended_shape`.
+    `ux_metrics.covers`, `ux_metrics.custom_question_territory`,
+    `ux_metrics.starting_stacks`, and `commands.tests.create.recommended_shape`.
 
 ## 0.6.0
 
