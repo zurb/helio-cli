@@ -119,11 +119,13 @@ No hand-written NPS in that example on purpose: `--ux-metrics loyalty` builds it
 | Findability, any stage | `success sentiment effort` | click tests |
 | Iteration on a flow | `expectations success sentiment` | |
 
-`success`, `effort`, `engagement`, `completion`, `usability`, `satisfaction` and `brand_score` are composites built from click tests or Figma prototypes — add those in the Helio web app; the CLI rejects them. See [UX Metrics](#ux-metrics) for the CLI-creatable list.
+`success`, `effort`, `engagement`, `completion`, `usability`, `satisfaction` and `brand_score` can't be created from the CLI — the Public API rejects them too. Build those in the Helio web app. See [UX Metrics](#ux-metrics) for the CLI-creatable list and why each of the seven is excluded.
 
 #### Custom questions — for what the metrics don't cover
 
-Before hand-writing a question, check it isn't metric territory: recommend/NPS is `loyalty`, "how easy was X" is `usefulness`, overall impression is `appeal`, "did you understand" is `comprehension`, "what did you expect" is `expectations`.
+That gap is narrower than it looks. Read the whole [coverage list](#ux-metrics) before deciding a question is custom — the overlap is usually with a metric you skipped, not the one you checked. The seven web-app-only metrics mostly cover task outcomes; those aren't custom-question territory either, so build them in the web app rather than approximating them here.
+
+Genuinely custom means your own domain — pricing, features, workflow specifics, "how did you pay", "which plan fits you" — or a question type no metric emits: `ranking`, `matrix`, `card_sort`, `point_allocation`, `max_diff`.
 
 ```bash
 # Add questions one at a time
@@ -225,9 +227,25 @@ helio-cli tests remove-ux-metrics <test-uuid> --metrics comprehension
 helio-cli tests ux-metric-types
 ```
 
-Available types: `sentiment`, `feeling`, `appeal`, `reaction`, `comprehension`, `frequency`, `loyalty`, `intent`, `desirability`, `usefulness`, `expectations`
+**Available types, and what each one already asks.** Read all eleven before hand-writing a question — the overlap is usually with a metric you skipped, not the one you checked.
 
-Not creatable from the CLI: `brand_score`, `engagement`, `success`, `completion`, `usability`, `satisfaction`, `effort` — these are composites built from click tests or Figma prototypes, so add them in the Helio web app.
+| Metric | Covers |
+| --- | --- |
+| `sentiment` | which words describe their impression |
+| `feeling` | which emotions it evokes |
+| `appeal` | overall impression (Likert) |
+| `reaction` | overall impression (Likert) — `appeal`'s twin |
+| `comprehension` | how well they understood it |
+| `frequency` | how often they use it |
+| `loyalty` | would they recommend it (NPS) |
+| `intent` | what they'd most likely do next |
+| `desirability` | impression words + how likely to purchase |
+| `usefulness` | is it useful + does it make things easier to get done |
+| `expectations` | what they expected + how well it was met |
+
+`helio-cli tests ux-metric-types --type <name>` prints the exact wording a metric generates.
+
+**Not creatable from the CLI** — and rejected by the Public API too, not just client-side: `engagement`, `success` and `usability` build click-test sections; `completion` and `effort` build Figma-prototype directives; `satisfaction` is a click test plus a Likert; `brand_score` is a fixed brand composite whose scoring depends on choice flags the create path can't set. Build all seven in the Helio web app.
 
 ### Reports
 
