@@ -75,12 +75,18 @@ describe('shouldCheckForUpdate', () => {
 });
 
 describe('formatUpdateNotice', () => {
-  it('includes both versions and the update command', () => {
+  it('includes both versions, the update command, and the opt-out', () => {
     const notice = formatUpdateNotice('0.3.0', '0.4.0');
     expect(notice).toContain('0.3.0');
     expect(notice).toContain('0.4.0');
     expect(notice).toContain('helio-cli update');
     expect(notice).toContain('npm install -g @zurb/helio-cli@latest');
+    expect(notice).toContain('HELIO_NO_UPDATE_CHECK=1');
+  });
+
+  it('omits ANSI escapes when the destination is not a TTY', () => {
+    expect(formatUpdateNotice('0.3.0', '0.4.0', true)).toContain('\x1b[33m');
+    expect(formatUpdateNotice('0.3.0', '0.4.0', false)).not.toContain('\x1b[');
   });
 });
 
@@ -104,17 +110,39 @@ describe('updateCheckDisabled', () => {
     expect(updateCheckDisabled()).toBe(false);
   });
 
-  it('disables via HELIO_NO_UPDATE_CHECK, JSON mode, and non-TTY', () => {
-    vi.stubEnv('HELIO_NO_UPDATE_CHECK', '1');
-    expect(updateCheckDisabled()).toBe(true);
-    vi.stubEnv('HELIO_NO_UPDATE_CHECK', '');
-
+  it('stays enabled in JSON mode, on a non-TTY stderr, and in both at once', () => {
     vi.stubEnv('__HELIO_OUTPUT', 'json');
-    expect(updateCheckDisabled()).toBe(true);
+    expect(updateCheckDisabled()).toBe(false);
     vi.stubEnv('__HELIO_OUTPUT', '');
 
     process.stderr.isTTY = false as never;
+    expect(updateCheckDisabled()).toBe(false);
+
+    // The agent case: --output json with no TTY anywhere.
+    vi.stubEnv('__HELIO_OUTPUT', 'json');
+    expect(updateCheckDisabled()).toBe(false);
+  });
+
+  it('disables via HELIO_NO_UPDATE_CHECK regardless of output mode or TTY', () => {
+    vi.stubEnv('HELIO_NO_UPDATE_CHECK', '1');
     expect(updateCheckDisabled()).toBe(true);
+
+    vi.stubEnv('__HELIO_OUTPUT', 'json');
+    process.stderr.isTTY = false as never;
+    expect(updateCheckDisabled()).toBe(true);
+  });
+
+  it('accepts any truthy HELIO_NO_UPDATE_CHECK but not 0/false/empty', () => {
+    vi.stubEnv('HELIO_NO_UPDATE_CHECK', 'true');
+    expect(updateCheckDisabled()).toBe(true);
+    vi.stubEnv('HELIO_NO_UPDATE_CHECK', 'yes');
+    expect(updateCheckDisabled()).toBe(true);
+    vi.stubEnv('HELIO_NO_UPDATE_CHECK', '0');
+    expect(updateCheckDisabled()).toBe(false);
+    vi.stubEnv('HELIO_NO_UPDATE_CHECK', 'false');
+    expect(updateCheckDisabled()).toBe(false);
+    vi.stubEnv('HELIO_NO_UPDATE_CHECK', '');
+    expect(updateCheckDisabled()).toBe(false);
   });
 
   it('treats CI=true as CI but CI=false/0/empty as not CI', () => {
@@ -224,6 +252,22 @@ describe('startUpdateCheck', () => {
 
     expect(write).toHaveBeenCalledOnce();
     expect(write.mock.calls[0][0]).toContain('0.3.0 → 99.0.0');
+  });
+
+  it('prints the notice in the agent environment: --output json and no TTY', () => {
+    const file = join(dir, 'update-check.json');
+    vi.stubEnv('__HELIO_OUTPUT', 'json');
+    process.stderr.isTTY = false as never;
+    writeUpdateCache({ lastCheckedAt: Date.now(), latestVersion: '99.0.0' }, file);
+    const write = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+
+    startUpdateCheck('0.3.0', file)();
+
+    expect(write).toHaveBeenCalledOnce();
+    const notice = write.mock.calls[0][0] as string;
+    expect(notice).toContain('0.3.0 → 99.0.0');
+    // stdout carries the JSON; the notice must not add escape codes to a pipe.
+    expect(notice).not.toContain('\x1b[');
   });
 
   it('prints nothing when up to date or when the cache is corrupt', () => {

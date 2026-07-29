@@ -16,13 +16,13 @@ Requires Node.js >= 22.
 
 ## Updating
 
-The CLI checks the npm registry for new versions at most once a day and prints a notice when one is available (TTY only — never in `--output json`, CI, or piped output). To update:
+The CLI checks the npm registry for new versions at most once a day and prints a notice on **stderr** when one is available. Because the notice never touches stdout, it shows up in `--output json` and in piped or redirected output too — `--output json` stays parseable, and scripts and agents can still find out the tool has moved. ANSI colors are used only when stderr is a TTY. To update:
 
 ```bash
 helio-cli update
 ```
 
-`helio-cli update --check` reports whether a newer version exists without installing. If the CLI was installed with pnpm, Yarn, Volta, or run via npx, `update` prints the matching command instead of using npm. Set `HELIO_NO_UPDATE_CHECK=1` to disable the background check entirely.
+`helio-cli update --check` reports whether a newer version exists without installing. If the CLI was installed with pnpm, Yarn, Volta, or run via npx, `update` prints the matching command instead of using npm. Set `HELIO_NO_UPDATE_CHECK=1` (any value other than `0`, `false`, or empty) to disable the background check entirely; it is also skipped when `CI` is set.
 
 ## Authentication
 
