@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.0
 
 ### Fixed
 - The "update available" notice is no longer suppressed by `--output json` or by
@@ -12,6 +12,10 @@
   `HELIO_NO_UPDATE_CHECK` and `CI` suppress it now. ([#18](https://github.com/zurb/helio-cli/issues/18))
 
 ### Changed
+- **Minor rather than patch.** stdout is untouched, so `--output json | jq .`
+  is unaffected — but a pipeline that folds stderr into stdout first, such as
+  `helio-cli tests list --output json 2>&1 | jq .`, can now receive the notice
+  and fail to parse. Read stdout on its own, or set `HELIO_NO_UPDATE_CHECK=1`.
 - The update notice omits ANSI color codes when stderr is not a TTY, and names
   `HELIO_NO_UPDATE_CHECK=1` as the way to silence it.
 - `HELIO_NO_UPDATE_CHECK` accepts any truthy value rather than the literal `1`
