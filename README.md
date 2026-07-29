@@ -50,6 +50,22 @@ Credential precedence (first wins):
 2. Environment variables (`HELIO_API_ID`, `HELIO_API_TOKEN`)
 3. Config file (`~/.helio-cli/config.json`)
 
+## Recommended workflow
+
+```bash
+helio-cli auth login                              # authenticate
+helio-cli projects list --output json             # find your project
+helio-cli tests ux-metric-types --output json     # pick metrics FIRST — they build validated, scored sections
+helio-cli tests create --dry-run ...              # validate before creating
+helio-cli tests create ...                        # create draft (--ux-metrics first, --questions for the rest)
+helio-cli tests preview <id>                      # verify structure
+helio-cli tests walkthrough <id>                  # see what a participant experiences, step by step
+helio-cli tests send <id>                         # launch
+helio-cli tests report <id> --output json         # get results
+```
+
+`helio-cli guide` prints this and the rest of the walkthrough from the binary itself; `helio-cli guide --output json` is the machine-readable version for agents.
+
 ## Commands
 
 ### Browsing
@@ -70,25 +86,46 @@ helio-cli tests get <test-uuid>
 
 ### Creating Tests
 
+**Pick your UX metrics first.** A tagged metric auto-builds its sections with validated, non-leading wording and returns a **0–100 score with a threshold label** — comparable across waves and rolled into the test's Overall Score. A question you hand-write to resemble a metric returns only an answer distribution and scores nothing. Use `--questions` for what no metric covers.
+
 ```bash
-# Create a test (saved as draft)
+# See what's available before writing anything
+helio-cli tests ux-metric-types
+helio-cli tests ux-metric-types --type sentiment
+
+# Create a test (saved as draft) — metrics first, custom questions for the rest
 helio-cli tests create \
     --project-id <uuid> \
-    --name "My Survey" \
+    --name "My Study" \
     --intro "Help us improve our product" \
     --target-audience-size 50 \
-    --questions '[
-      {"type": "MultipleChoice", "instructions": "How easy was signup?",
-       "choices": ["Very easy", "Easy", "Neutral", "Difficult"]},
-      {"type": "FreeResponse", "instructions": "What would you improve?"},
-      {"type": "NPS", "instructions": "How likely are you to recommend us?"}
-    ]'
+    --ux-metrics sentiment loyalty \
+    --ux-metric-context "the signup flow" \
+    --questions '[{"type":"free_response","instructions":"What would you improve?"}]'
 
 # Validate without creating
 helio-cli tests create --dry-run \
     --project-id <uuid> --name "Test" --intro "Hi" \
-    --target-audience-size 50 --questions '[...]'
+    --target-audience-size 50 --ux-metrics sentiment loyalty
+```
 
+No hand-written NPS in that example on purpose: `--ux-metrics loyalty` builds it, and unlike a typed-out NPS it scores.
+
+**Starting stacks** — from the Helio test corpus, if you don't know which metrics to pick:
+
+| Situation | Metrics | Also |
+| --- | --- | --- |
+| First look, one screen | `comprehension desirability intent` | a click test for engagement |
+| Findability, any stage | `success sentiment effort` | click tests |
+| Iteration on a flow | `expectations success sentiment` | |
+
+`success`, `effort`, `engagement`, `completion`, `usability`, `satisfaction` and `brand_score` are composites built from click tests or Figma prototypes — add those in the Helio web app; the CLI rejects them. See [UX Metrics](#ux-metrics) for the CLI-creatable list.
+
+#### Custom questions — for what the metrics don't cover
+
+Before hand-writing a question, check it isn't metric territory: recommend/NPS is `loyalty`, "how easy was X" is `usefulness`, overall impression is `appeal`, "did you understand" is `comprehension`, "what did you expect" is `expectations`.
+
+```bash
 # Add questions one at a time
 helio-cli tests add-question <test-uuid> \
     --type multiple_choice \
@@ -96,11 +133,8 @@ helio-cli tests add-question <test-uuid> \
     --choices "Credit card" "PayPal" "Apple Pay"
 
 helio-cli tests add-question <test-uuid> \
-    --type likert --instructions "Checkout was easy." \
-    --scale-type agreement
-
-helio-cli tests add-question <test-uuid> \
-    --type nps --instructions "Would you recommend us?"
+    --type likert --instructions "How important is same-day delivery to you?" \
+    --scale-type importance
 
 # Preview and launch
 helio-cli tests preview <test-uuid>
@@ -153,7 +187,7 @@ Likert scales: `agreement`, `occurrence`, `importance`, `quality`, `comprehensio
 
 ### UX Metrics
 
-Auto-generate standardized measurement questions:
+Auto-generate standardized measurement questions. Each tagged metric produces a 0–100 score with a threshold label that is comparable across waves and feeds the test's Overall Score — which is why they come first, before any hand-written question (see [Creating Tests](#creating-tests)).
 
 ```bash
 # Add metrics during test creation
@@ -162,8 +196,8 @@ helio-cli tests create \
     --name "UX Study" \
     --intro "Help us evaluate the experience" \
     --target-audience-size 50 \
-    --questions '[{"type": "free_response", "instructions": "What did you think?"}]' \
-    --ux-metrics sentiment loyalty
+    --ux-metrics sentiment loyalty \
+    --questions '[{"type": "free_response", "instructions": "What did you think?"}]'
 
 # Customize metric wording
 helio-cli tests create ... \
@@ -192,6 +226,8 @@ helio-cli tests ux-metric-types
 ```
 
 Available types: `sentiment`, `feeling`, `appeal`, `reaction`, `comprehension`, `frequency`, `loyalty`, `intent`, `desirability`, `usefulness`, `expectations`
+
+Not creatable from the CLI: `brand_score`, `engagement`, `success`, `completion`, `usability`, `satisfaction`, `effort` — these are composites built from click tests or Figma prototypes, so add them in the Helio web app.
 
 ### Reports
 

@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- `guide` and the README now teach metrics-first. Previously both opened with a
+  hand-written `{"type": "NPS", "instructions": "How likely are you to recommend
+  us?"}` — which *is* the `loyalty` metric, built by hand and therefore scoring
+  nothing — and introduced `--ux-metrics` last, as an optional additive. A tagged
+  metric auto-builds its sections with validated, non-leading wording and returns
+  a 0–100 score with a threshold label that is comparable across waves and feeds
+  the Overall Score; its hand-written lookalike returns only an answer
+  distribution. The guide ships with the binary, so it was quietly teaching the
+  anti-pattern to every agent that runs `guide --output json` as onboarding.
+  ([#21](https://github.com/zurb/helio-cli/issues/21))
+  - `recommended_workflow` gains `helio-cli tests ux-metric-types` as step 3,
+    before `create`.
+  - §3's first `create` example leads with `--ux-metrics sentiment loyalty
+    --ux-metric-context "the signup flow"` and keeps only a genuinely custom
+    free-response question. The hand-written NPS is gone.
+  - The UX-metrics block moved above the `add-question` examples, which are now
+    framed as "for what the metrics don't cover" and carry a
+    metric-territory check. The `likert` example no longer restates
+    usefulness/satisfaction.
+  - Added empirical starting stacks (first look → `comprehension desirability
+    intent`; findability → `success sentiment effort`; flow iteration →
+    `expectations success sentiment`), each flagged where a metric is a click
+    test / prototype composite the CLI rejects.
+  - JSON guide gains `metrics_first`, `ux_metrics.why_metrics_first`,
+    `ux_metrics.metric_territory`, `ux_metrics.starting_stacks`, and
+    `commands.tests.create.recommended_shape`.
+
 ## 0.6.0
 
 ### Fixed

@@ -54,18 +54,76 @@ const GUIDE = `
 
 \x1b[1m3. CREATING & LAUNCHING TESTS\x1b[0m
 
-  Create a test (saved as draft):
+  \x1b[1mPick your UX metrics first.\x1b[0m A tagged metric auto-builds its sections with
+  validated, non-leading wording and returns a \x1b[1m0-100 score with a threshold
+  label\x1b[0m — comparable across waves and rolled into the test's Overall Score.
+  A question you hand-write to resemble a metric returns only an answer
+  distribution and scores nothing. Write custom questions for the rest.
+
+  See what's available before you write anything:
+    $ helio-cli tests ux-metric-types
+    $ helio-cli tests ux-metric-types --type sentiment
+
+  Starting stacks (from the Helio test corpus) — if you don't know which to pick:
+    first look, one screen    → comprehension desirability intent
+                                (+ a click test for engagement)
+    findability, any stage    → success sentiment effort   (+ click tests)
+    iteration on a flow       → expectations success sentiment
+
+    success, effort, engagement, completion, usability, satisfaction and
+    brand_score are composites built from click tests or Figma prototypes —
+    add those in the Helio web app; the CLI rejects them. Everything under
+    "Available UX metric types" below is CLI-creatable.
+
+  Create a test (saved as draft) — metrics first, custom questions for the rest:
     $ helio-cli tests create \\
         --project-id <uuid> \\
-        --name "My Survey" \\
+        --name "My Study" \\
         --intro "Help us improve our product" \\
         --target-audience-size 50 \\
-        --questions '[
-          {"type": "MultipleChoice", "instructions": "How easy was signup?",
-           "choices": ["Very easy", "Easy", "Neutral", "Difficult"]},
-          {"type": "FreeResponse", "instructions": "What would you improve?"},
-          {"type": "NPS", "instructions": "How likely are you to recommend us?"}
-        ]'
+        --ux-metrics sentiment loyalty \\
+        --ux-metric-context "the signup flow" \\
+        --questions '[{"type":"free_response","instructions":"What would you improve?"}]'
+
+    No hand-written NPS in there on purpose: --ux-metrics loyalty builds it,
+    and unlike a typed-out NPS it scores.
+
+  Customize metric instructions with --ux-metric-context (replaces generic nouns):
+    $ helio-cli tests create \\
+        --project-id <uuid> \\
+        --name "Dashboard Pulse" \\
+        --intro "Help us evaluate the dashboard" \\
+        --target-audience-size 50 \\
+        --ux-metrics sentiment loyalty \\
+        --ux-metric-context "the Helio dashboard"
+
+  Or create a metrics-only test (no custom questions):
+    $ helio-cli tests create \\
+        --project-id <uuid> \\
+        --name "Quick Pulse" \\
+        --intro "Quick feedback" \\
+        --target-audience-size 50 \\
+        --ux-metrics sentiment appeal usefulness
+
+  Available UX metric types:
+    sentiment, feeling, appeal, reaction, comprehension, frequency,
+    loyalty, intent, desirability, usefulness, expectations
+
+  Add or remove UX metrics on an existing draft:
+    $ helio-cli tests add-ux-metrics <test-uuid> --metrics comprehension loyalty
+    $ helio-cli tests add-ux-metrics <test-uuid> --position 2 \\
+        --metrics-json '[{"type":"sentiment","context":"the checkout flow"}]'
+    $ helio-cli tests remove-ux-metrics <test-uuid> --metrics comprehension
+
+  Edit UX metric section safe fields (instructions, assets, choice text, randomize, follow-ups):
+    $ helio-cli tests edit-question <test-uuid> <section-uuid> \\
+        --instructions "What impressions does the new design give you?"
+    $ helio-cli tests edit-question <test-uuid> <section-uuid> \\
+        --site-link "https://helio.app/dashboard"
+    $ helio-cli tests edit-question <test-uuid> <section-uuid> \\
+        --choices "Sign up" "Browse pricing" "Leave site" "Contact sales"  # count must match (intent may resize to >= 3)
+    $ helio-cli tests edit-question <test-uuid> <section-uuid> \\
+        --followup "Why did you choose that?" --followup-required
 
   Or use --project-name instead of UUID:
     $ helio-cli tests create --project-name "UX Research" ...
@@ -73,7 +131,14 @@ const GUIDE = `
   Validate before creating (no API call):
     $ helio-cli tests create --dry-run \\
         --project-id <uuid> --name "Test" --intro "Hi" \\
-        --target-audience-size 50 --questions '[...]'
+        --target-audience-size 50 --ux-metrics sentiment loyalty
+
+  ──────────────────────────────
+
+  \x1b[1mCustom questions — for what the metrics don't cover.\x1b[0m
+  Before hand-writing one, check it isn't metric territory: recommend/NPS is
+  loyalty, "how easy was X" is usefulness/satisfaction, overall impression is
+  appeal, "did you understand" is comprehension.
 
   Add questions one at a time to a draft:
     $ helio-cli tests add-question <test-uuid> \\
@@ -81,10 +146,8 @@ const GUIDE = `
         --instructions "How did you pay?" \\
         --choices "Credit card" "PayPal" "Apple Pay"
     $ helio-cli tests add-question <test-uuid> \\
-        --type likert --instructions "Checkout was easy." \\
-        --scale-type agreement
-    $ helio-cli tests add-question <test-uuid> \\
-        --type nps --instructions "Would you recommend us?"
+        --type likert --instructions "How important is same-day delivery to you?" \\
+        --scale-type importance
     $ helio-cli tests add-question <test-uuid> \\
         --type ranking --instructions "Rank by importance" \\
         --choices "Speed" "Design" "Price" "Support"
@@ -113,56 +176,10 @@ const GUIDE = `
                  impression, expectations, usefulness, difficulty, likelihood,
                  custom (provide --custom-choices)
 
-  Add UX metrics (auto-generates standardized measurement questions):
-    $ helio-cli tests create \\
-        --project-id <uuid> \\
-        --name "UX Study" \\
-        --intro "Help us evaluate the experience" \\
-        --target-audience-size 50 \\
-        --questions '[{"type": "free_response", "instructions": "What did you think?"}]' \\
-        --ux-metrics sentiment loyalty
-
-  Customize metric instructions with --ux-metric-context (replaces generic nouns):
-    $ helio-cli tests create \\
-        --project-id <uuid> \\
-        --name "Dashboard Pulse" \\
-        --intro "Help us evaluate the dashboard" \\
-        --target-audience-size 50 \\
-        --ux-metrics sentiment loyalty \\
-        --ux-metric-context "the Helio dashboard"
-
-  Or create a metrics-only test (no custom questions):
-    $ helio-cli tests create \\
-        --project-id <uuid> \\
-        --name "Quick Pulse" \\
-        --intro "Quick feedback" \\
-        --target-audience-size 50 \\
-        --ux-metrics sentiment appeal usefulness
-
-  Edit UX metric section safe fields (instructions, assets, choice text, randomize, follow-ups):
-    $ helio-cli tests edit-question <test-uuid> <section-uuid> \\
-        --instructions "What impressions does the new design give you?"
-    $ helio-cli tests edit-question <test-uuid> <section-uuid> \\
-        --site-link "https://helio.app/dashboard"
-    $ helio-cli tests edit-question <test-uuid> <section-uuid> \\
-        --choices "Sign up" "Browse pricing" "Leave site" "Contact sales"  # count must match (intent may resize to >= 3)
-    $ helio-cli tests edit-question <test-uuid> <section-uuid> \\
-        --followup "Why did you choose that?" --followup-required
-
   Attach a follow-up when adding a question:
     $ helio-cli tests add-question <test-uuid> --type multiple_choice \\
         --instructions "Pick one" --choices "A" "B" "C" \\
         --followup "Why?" --followup-for-choices 0 2
-
-  Available UX metric types:
-    sentiment, feeling, appeal, reaction, comprehension, frequency,
-    loyalty, intent, desirability, usefulness, expectations
-
-  Add or remove UX metrics on an existing draft:
-    $ helio-cli tests add-ux-metrics <test-uuid> --metrics comprehension loyalty
-    $ helio-cli tests add-ux-metrics <test-uuid> --position 2 \\
-        --metrics-json '[{"type":"sentiment","context":"the checkout flow"}]'
-    $ helio-cli tests remove-ux-metrics <test-uuid> --metrics comprehension
 
   View current question/metric order:
     $ helio-cli tests order <test-uuid>
@@ -170,10 +187,6 @@ const GUIDE = `
   Reorder questions and metric groups:
     $ helio-cli tests reorder <test-uuid> \\
         --order "metric:sentiment" "section:<q1-uuid>" "section:<q2-uuid>" "metric:loyalty"
-
-  See details:
-    $ helio-cli tests ux-metric-types
-    $ helio-cli tests ux-metric-types --type sentiment
 
   Preview what you've built (flat structural summary):
     $ helio-cli tests preview <test-uuid>
@@ -301,13 +314,15 @@ const GUIDE_JSON = {
   recommended_workflow: [
     '1. helio-cli auth login                              # authenticate',
     '2. helio-cli projects list --output json              # find your project',
-    '3. helio-cli tests create --dry-run ...               # validate before creating',
-    '4. helio-cli tests create ...                         # create draft',
-    '5. helio-cli tests preview <id>                       # verify structure',
-    '6. helio-cli tests walkthrough <id>                   # see what a participant experiences, step by step',
-    '7. helio-cli tests send <id>                          # launch',
-    '8. helio-cli tests report <id> --output json          # get results',
+    '3. helio-cli tests ux-metric-types --output json      # pick metrics FIRST — they build validated, scored sections',
+    '4. helio-cli tests create --dry-run ...               # validate before creating',
+    '5. helio-cli tests create ...                         # create draft (--ux-metrics first, --questions for the rest)',
+    '6. helio-cli tests preview <id>                       # verify structure',
+    '7. helio-cli tests walkthrough <id>                   # see what a participant experiences, step by step',
+    '8. helio-cli tests send <id>                          # launch',
+    '9. helio-cli tests report <id> --output json          # get results',
   ],
+  metrics_first: 'Choose UX metrics before writing questions. A tagged metric auto-builds its sections with validated, non-leading wording and returns a 0-100 score with a threshold label, comparable across waves and rolled into the test Overall Score. A hand-written question that resembles a metric (an NPS you typed yourself, "How easy was signup?") returns only an answer distribution and scores nothing. Write custom questions for what the metrics do not cover.',
   commands: {
     auth: {
       login: { description: 'Set up API credentials', args: '--api-id <id> --api-token <token>' },
@@ -362,12 +377,13 @@ const GUIDE_JSON = {
       create: {
         description: 'Create a new test (saved as draft)',
         required: ['--name <name>', '--intro <text>', '--target-audience-size <n>'],
-        one_of_required: ['--questions <json>', '--ux-metrics <types...>', '--ux-metrics-json <json>'],
+        one_of_required: ['--ux-metrics <types...>', '--ux-metrics-json <json>', '--questions <json>'],
+        recommended_shape: 'Lead with --ux-metrics (scored, validated sections) and use --questions only for what no metric covers. See ux_metrics.why_metrics_first and ux_metrics.starting_stacks.',
         project: 'Provide either --project-id <uuid> or --project-name <name> (resolved to UUID)',
         optional: ['--audience-type <type> (default: open)', '--audiences <ids...>', '--ux-metrics <types...>', '--ux-metrics-json <json>', '--ux-metric-context <text>', '--dry-run'],
         dry_run: 'Validates questions and ux-metrics locally and shows estimated answer spend without creating the test.',
         questions_format: 'JSON array or @path/to/file.json',
-        ux_metrics_note: 'Auto-generates standardized measurement questions. Can be used with or without --questions.',
+        ux_metrics_note: 'Auto-generates standardized measurement questions that return a 0-100 score with a threshold label. Can be used with or without --questions; prefer a metric over hand-writing its lookalike.',
         ux_metrics_json_note: 'Object form of --ux-metrics (mutually exclusive with it): \'[{"type":"sentiment","context":"the checkout flow","sections":[{"instructions":"...","asset_id":"...","site_link":"...","followup":{"question":"Why?","required":true,"for_choices":[0,1]}}]}]\'. Per-metric context overrides --ux-metric-context; section overrides apply in template order.',
         ux_metric_context_note: 'Replaces generic nouns (e.g. "this page", "this product") in auto-generated instructions with your context string.',
         validation: 'Client-side validation runs automatically. Errors return {valid: false, errors: [...]} with exit code 0.',
@@ -574,13 +590,28 @@ const GUIDE_JSON = {
     read_only: ['click_test', 'tree_test', 'prototype_task'],
   },
   ux_metrics: {
-    description: 'UX metrics auto-generate standardized measurement questions when added to a test via --ux-metrics.',
+    description: 'UX metrics auto-generate standardized measurement questions when added to a test via --ux-metrics. Pick them before writing any question.',
+    why_metrics_first: 'A tagged metric builds its sections with validated, non-leading wording and returns a 0-100 score with a threshold label — comparable across waves and rolled into the test Overall Score. A hand-written lookalike (your own NPS, "How easy was signup?") returns only an answer distribution, scores nothing, and is not comparable across waves. Reserve --questions for what no metric covers.',
+    metric_territory: {
+      'recommend / NPS': 'loyalty',
+      'how easy was X / does it help me get things done': 'usefulness',
+      'overall impression': 'appeal (or reaction)',
+      'did you understand it': 'comprehension',
+      'what did you expect': 'expectations',
+      'what would you do next': 'intent',
+    },
+    starting_stacks: {
+      'first look, one screen': { metrics: ['comprehension', 'desirability', 'intent'], also: 'a click test for engagement (web app)' },
+      'findability, any stage': { metrics: ['success', 'sentiment', 'effort'], also: 'click tests; success and effort are web-app only' },
+      'iteration on a flow': { metrics: ['expectations', 'success', 'sentiment'], also: 'success is web-app only' },
+      note: 'Drawn from the Helio test corpus. Use as a default when you have no stronger reason to pick otherwise; drop any metric listed under excluded_types and build it in the web app.',
+    },
     valid_types: ['sentiment', 'feeling', 'appeal', 'reaction', 'comprehension', 'frequency', 'loyalty', 'intent', 'desirability', 'usefulness', 'expectations'],
     excluded_types: {
       types: ['brand_score', 'engagement', 'success', 'completion', 'usability', 'satisfaction', 'effort'],
-      reason: 'Require click tests, Figma prototypes, or complex multi-section composites',
+      reason: 'Require click tests, Figma prototypes, or complex multi-section composites — add them in the Helio web app; the CLI rejects them',
     },
-    example: 'helio-cli tests create --project-id <uuid> --name "UX Study" --intro "Evaluate this" --target-audience-size 50 --questions \'[{"type":"free_response","instructions":"Thoughts?"}]\' --ux-metrics sentiment loyalty',
+    example: 'helio-cli tests create --project-id <uuid> --name "My Study" --intro "Help us improve our product" --target-audience-size 50 --ux-metrics sentiment loyalty --ux-metric-context "the signup flow" --questions \'[{"type":"free_response","instructions":"What would you improve?"}]\'',
     context_example: 'helio-cli tests create --project-id <uuid> --name "Dashboard Pulse" --intro "Evaluate" --target-audience-size 50 --ux-metrics sentiment loyalty --ux-metric-context "the Helio dashboard"',
     metrics_only_example: 'helio-cli tests create --project-id <uuid> --name "Quick Pulse" --intro "Feedback" --target-audience-size 50 --ux-metrics sentiment appeal usefulness',
     edit_metric_example: 'helio-cli tests edit-question <test-uuid> <section-uuid> --instructions "What impressions does the new design give you?"',
