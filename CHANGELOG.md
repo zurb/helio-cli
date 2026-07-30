@@ -1,6 +1,21 @@
 # Changelog
 
-## Unreleased
+## 0.7.0
+
+### Breaking
+- **`tests ux-metric-types --output json` changed shape.** It used to print the
+  metric table at the top level (`{"sentiment": {...}, "loyalty": {...}}`); it
+  now prints `{"metrics": {...}, "excluded": {...}}`. The nesting is what makes
+  room for `excluded`, which carries the per-type reason a metric can't be
+  created — the thing an agent needs in order to pick a different one rather
+  than retry. Scripts reading the old shape need `.metrics` added to the path:
+  `helio-cli tests ux-metric-types --output json | jq '.metrics'`.
+
+  Every other JSON change in this release is additive: `tests order` gains
+  `reorderable` (plus `ambiguous_metric_types` and `blocks[].ambiguous` when
+  relevant), `tests preview` gains `audience` / `branching` / `hotspots`,
+  `walkthrough` screens gain `branching` / `hotspots`, and `tests create` /
+  `add-ux-metrics` gain `warnings` when a metric would score zero.
 
 ### Added
 - **Five UX metric types are now creatable**, matching the 2026-07-30 Public API
