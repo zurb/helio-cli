@@ -707,3 +707,25 @@ describe('uxMetricWarnings', () => {
     expect(uxMetricWarnings(['success', 'success'])).toHaveLength(2);
   });
 });
+
+// ─── Inherited object keys ───────────────────────────────────────────────────
+// The excluded/valid metric tables are plain objects, so a bare OBJ[key] lookup
+// would treat "constructor" / "toString" / "__proto__" as present.
+
+describe('validateUxMetrics — prototype keys', () => {
+  it.each(['constructor', 'toString', '__proto__', 'hasOwnProperty'])(
+    'reports %s as an unknown metric type, not as an excluded one',
+    name => {
+      const errors = validateUxMetrics([name]);
+      expect(errors).toHaveLength(1);
+      expect(errors[0].message.startsWith(`Unknown metric type "${name}"`)).toBe(true);
+      // The tell of a bare OBJ[key] lookup: the inherited function stringified
+      // into the message where the exclusion reason should be.
+      expect(errors[0].message).not.toMatch(/native code|\[object Object\]/);
+    },
+  );
+
+  it('says nothing about prototype keys in uxMetricWarnings', () => {
+    expect(uxMetricWarnings(['constructor', 'toString'])).toEqual([]);
+  });
+});

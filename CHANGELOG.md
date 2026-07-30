@@ -26,6 +26,14 @@
   `hotspots` blocks, and `walkthrough` screens carry `branching` and `hotspots`.
   A click section with no hotspots is called out, since on a hotspot-scored
   metric that means it scores zero.
+  - Two question-numbering systems meet here and are kept apart deliberately.
+    Everything the CLI prints numbers sections in position order **including**
+    UX metric sections; a branch's `question` counts researcher questions
+    **only**. Rather than replicate that counting, branch targets are resolved
+    through the branch's `section_id`, so `skip to Q3` always names the Q the
+    CLI just printed. In JSON, `from_question_number` / `target_question_number`
+    (and `target_q_number` on walkthrough screens) are CLI-listing numbers,
+    while the API's own `question` is passed through untouched.
 - Hotspot geometry now rejects a rectangle that hangs off the image
   (`x + width` or `y + height` above 1), matching the API. Applies to
   `click_test` questions and to metric section overrides, which share one

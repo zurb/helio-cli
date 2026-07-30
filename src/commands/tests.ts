@@ -620,6 +620,7 @@ function printReportQuestions(questions: ReportQuestion[]): void {
 
 function printSectionQuestions(sections: SectionData[]): void {
   const sorted = [...sections].sort((a, b) => a.position - b.position);
+  const qIndex = buildQuestionNumberIndex(sections);
   for (let i = 0; i < sorted.length; i++) {
     const s = sorted[i];
     const label = typeLabel(s.type);
@@ -641,7 +642,7 @@ function printSectionQuestions(sections: SectionData[]): void {
     }
 
     printHotspots(s);
-    printBranching(s);
+    printBranching(s, qIndex);
 
     console.log();
   }
@@ -681,12 +682,42 @@ function fmtBox(h: HotspotData): string {
   return `x ${pct(h.x)}, y ${pct(h.y)}, ${pct(h.width)}×${pct(h.height)}`;
 }
 
-function printBranching(s: SectionData): void {
+/**
+ * Section id → the Q number the CLI prints for it.
+ *
+ * TWO numbering systems are in play and they are not the same. Everything the
+ * CLI prints (`printSectionQuestions`, `printReportQuestions`, `OrderBlock`)
+ * numbers sections in position order including UX metric sections. A branch's
+ * `question` counts researcher questions ONLY — `decorate_sections!` builds it
+ * from `ordered.reject { |s| s.ux_metric_id.present? }` — so on any test with a
+ * metric the two drift apart by the number of metric sections before the
+ * target. Resolving the branch's `section_id` against this index sidesteps the
+ * counting entirely and is exact.
+ */
+export function buildQuestionNumberIndex(sections: SectionData[] | undefined): Map<number, number> {
+  const ordered = [...(sections ?? [])].sort((a, b) => a.position - b.position);
+  const index = new Map<number, number>();
+  ordered.forEach((s, i) => {
+    // Section ids are numeric on the wire even though the type says string.
+    const numericId = Number(s.id);
+    if (Number.isFinite(numericId)) index.set(numericId, i + 1);
+  });
+  return index;
+}
+
+/** The CLI-listing Q number a branch points at, or null if it can't be resolved. */
+function branchTargetQNumber(b: BranchingData, qIndex: Map<number, number>): number | null {
+  if (b.section_id == null) return null;
+  return qIndex.get(Number(b.section_id)) ?? null;
+}
+
+function printBranching(s: SectionData, qIndex: Map<number, number>): void {
   if (!Array.isArray(s.branching) || s.branching.length === 0) return;
 
   console.log(`      Branching:`);
   for (const b of s.branching) {
     const from = b.label ? `"${b.label}"` : `${b.source} ${b.index}`;
+    const target = branchTargetQNumber(b, qIndex);
     const to =
       b.action === 'end_test'
         ? b.message
@@ -694,8 +725,8 @@ function printBranching(s: SectionData): void {
           : b.redirect_url
             ? `end test → ${b.redirect_url}`
             : 'end test'
-        : b.question != null
-          ? `skip to Q${b.question}`
+        : target != null
+          ? `skip to Q${target}`
           : `skip to section ${b.section_id ?? '?'}`;
     console.log(`        ${from} → ${to}`);
   }
@@ -712,23 +743,37 @@ function printStructureNotes(sections: SectionData[] | undefined): void {
   if (!withNotes.length) return;
 
   const ordered = [...(sections ?? [])].sort((a, b) => a.position - b.position);
+  const qIndex = buildQuestionNumberIndex(sections);
   console.log(`\x1b[1mStructure\x1b[0m`);
   for (const s of withNotes) {
     const q = ordered.indexOf(s) + 1;
     console.log(`  \x1b[1mQ${q}.\x1b[0m ${s.stripped_instructions || stripHtml(s.instructions || '')}`);
     printHotspots(s);
-    printBranching(s);
+    printBranching(s, qIndex);
   }
   console.log();
 }
 
-/** Flat, question-numbered branching for JSON consumers. */
+/**
+ * Flat branching for JSON consumers. Both numbering systems are present and
+ * each is named for the space it lives in: `from_question_number` and
+ * `target_question_number` are CLI-listing numbers (metric sections counted),
+ * while the spread-in `question` is the API's own field and counts researcher
+ * questions only. `target_question_number` is null for end_test branches and
+ * whenever the target section isn't in this payload.
+ */
 export function buildBranchingSummary(sections: SectionData[] | undefined): unknown[] {
   const ordered = [...(sections ?? [])].sort((a, b) => a.position - b.position);
+  const qIndex = buildQuestionNumberIndex(sections);
   // `section_id` on a branch is its TARGET, not the section it hangs off, so
   // the source section is named separately rather than shadowing it.
   return ordered.flatMap((s, i) =>
-    (s.branching ?? []).map(b => ({ question_number: i + 1, from_section_id: s.id, ...b })),
+    (s.branching ?? []).map(b => ({
+      from_question_number: i + 1,
+      from_section_id: s.id,
+      target_question_number: branchTargetQNumber(b, qIndex),
+      ...b,
+    })),
   );
 }
 
@@ -1081,7 +1126,9 @@ export function validateUxMetrics(metrics: unknown): ValidationError[] {
       continue;
     }
 
-    const excludedReason = EXCLUDED_UX_METRIC_TYPES[m];
+    // Own-property checks: a bare `OBJ[m]` lookup treats inherited keys
+    // ("constructor", "toString", "__proto__") as present and garbles the error.
+    const excludedReason = Object.hasOwn(EXCLUDED_UX_METRIC_TYPES, m) ? EXCLUDED_UX_METRIC_TYPES[m] : undefined;
     if (excludedReason) {
       errors.push({
         question: 0,
@@ -1091,7 +1138,7 @@ export function validateUxMetrics(metrics: unknown): ValidationError[] {
       continue;
     }
 
-    const spec = UX_METRIC_TYPES[m];
+    const spec = Object.hasOwn(UX_METRIC_TYPES, m) ? UX_METRIC_TYPES[m] : undefined;
     if (!spec) {
       errors.push({
         question: 0,
@@ -1135,8 +1182,8 @@ export function uxMetricWarnings(metrics: unknown): string[] {
   for (const entry of metrics) {
     const type = typeof entry === 'string' ? entry : (entry as { type?: unknown } | null)?.type;
     if (typeof type !== 'string') continue;
+    if (!Object.hasOwn(UX_METRIC_TYPES, type)) continue;
     const spec = UX_METRIC_TYPES[type];
-    if (!spec) continue;
 
     const sections = (typeof entry === 'object' && entry !== null
       ? (entry as UxMetricObjectInput).sections
@@ -1796,8 +1843,14 @@ export type WalkthroughScreen =
       ux_metric?: string;
       site_link?: string;
       assets: WalkthroughAsset[];
-      /** Read-back of what `branching` writes; omitted when the section has none. */
-      branching?: BranchingData[];
+      /**
+       * Read-back of what `branching` writes; omitted when the section has none.
+       * `target_q_number` is added by the CLI: the Q number in THIS screen list
+       * that the branch points at. The API's own `question` counts researcher
+       * questions only, so it does not match these screen numbers on a test
+       * that has UX metric sections.
+       */
+      branching?: (BranchingData & { target_q_number?: number | null })[];
       /** Click sections only. Empty = engagement heatmap, nothing hotspot-scored. */
       hotspots?: HotspotData[];
       renderable: 'full' | 'placeholder';
@@ -1848,6 +1901,7 @@ export function buildWalkthroughScreens(test: TestShowResponse): WalkthroughScre
   }
 
   const sections = [...(test.sections ?? [])].sort((a, b) => a.position - b.position);
+  const qIndex = buildQuestionNumberIndex(test.sections);
   let qNumber = 0;
   for (const s of sections) {
     qNumber += 1;
@@ -1888,7 +1942,9 @@ export function buildWalkthroughScreens(test: TestShowResponse): WalkthroughScre
       ux_metric: uxMetric,
       site_link: variation?.site_link || undefined,
       assets,
-      branching: Array.isArray(s.branching) && s.branching.length ? s.branching : undefined,
+      branching: Array.isArray(s.branching) && s.branching.length
+        ? s.branching.map(b => ({ ...b, target_q_number: branchTargetQNumber(b, qIndex) }))
+        : undefined,
       hotspots: Array.isArray(s.hotspots) ? s.hotspots : undefined,
       renderable: ASSET_HEAVY_RAW_TYPES.has(s.type) ? 'placeholder' : 'full',
     });
@@ -1933,8 +1989,8 @@ function branchingLines(screen: WalkthroughScreen): string[] {
       const to =
         b.action === 'end_test'
           ? 'end test'
-          : b.question != null
-            ? `Q${b.question}`
+          : b.target_q_number != null
+            ? `Q${b.target_q_number}`
             : `section ${b.section_id ?? '?'}`;
       return `  \x1b[90m    ${from} → ${to}\x1b[0m`;
     }),
@@ -1960,7 +2016,7 @@ function stimulusLines(screen: WalkthroughScreen): string[] {
   return lines;
 }
 
-function renderWalkthroughScreen(screen: WalkthroughScreen): string[] {
+export function renderWalkthroughScreen(screen: WalkthroughScreen): string[] {
   const lines: string[] = [];
   if (screen.kind === 'intro') {
     lines.push(`  ${screen.text}`);
@@ -2072,6 +2128,12 @@ function renderWalkthroughScreen(screen: WalkthroughScreen): string[] {
     }
   }
 
+  // Both render paths get these. The placeholder path returns early, so a
+  // screen is never annotated twice — but a click section does NOT reliably
+  // take that path (its raw type is "ClickSection", which is not one of the
+  // ASSET_HEAVY_RAW_TYPES strings), and a click section with no hotspots is
+  // exactly the case worth surfacing.
+  lines.push(...hotspotLines(screen));
   lines.push(...branchingLines(screen));
   lines.push('');
   lines.push('  [ Next ]');
@@ -3156,6 +3218,14 @@ export function registerTestsCommand(program: Command): void {
           if (!question.instructions) {
             throw new Error('--instructions is required when --type is provided.');
           }
+          // Only a UX metric section carries a brand choice, and --type means a
+          // regular question. The API would drop this silently, leaving the
+          // caller believing they marked a brand.
+          if (question.brand_choice !== undefined) {
+            throw new Error(
+              '--brand-choice applies only to a UX metric section, which is the mode entered by omitting --type. Drop --type, or drop --brand-choice.',
+            );
+          }
           const errors = validateQuestions([question], { standalone: true });
           if (errors.length > 0) {
             if (isJsonMode()) {
@@ -3190,7 +3260,13 @@ export function registerTestsCommand(program: Command): void {
           // anywhere but brand_score's market recognition section.
           if (question.hotspots !== undefined) {
             const hotspotErrors: ValidationError[] = [];
-            validateHotspots(question.hotspots as unknown[], 0, 'hotspots', hotspotErrors);
+            if (!Array.isArray(question.hotspots)) {
+              // validateHotspots reads .length, so a non-array would loop zero
+              // times and report nothing — guard before, as the --type path does.
+              hotspotErrors.push({ question: 0, field: 'hotspots', message: 'Must be an array of hotspot objects' });
+            } else {
+              validateHotspots(question.hotspots, 0, 'hotspots', hotspotErrors);
+            }
             if (hotspotErrors.length > 0) {
               if (isJsonMode()) {
                 printJson({ valid: false, errors: hotspotErrors });
