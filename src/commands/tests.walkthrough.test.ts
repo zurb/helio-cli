@@ -3,6 +3,7 @@ import {
   buildWalkthroughScreens,
   resolveTestMeta,
   walkthroughScreenJson,
+  renderWalkthroughScreen,
   type TestShowResponse,
 } from './tests.js';
 
@@ -254,9 +255,9 @@ describe('walkthroughScreenJson', () => {
 
   it('question screens expose the agent-facing field set', () => {
     expect(Object.keys(json[2]).sort()).toEqual([
-      'allow_multiple', 'assets', 'choices', 'kind', 'position', 'q_number',
-      'question', 'randomize_choices', 'raw_type', 'renderable',
-      'scale_type', 'site_link', 'type', 'type_label', 'ux_metric',
+      'allow_multiple', 'assets', 'branching', 'choices', 'hotspots', 'kind',
+      'position', 'q_number', 'question', 'randomize_choices', 'raw_type',
+      'renderable', 'scale_type', 'site_link', 'type', 'type_label', 'ux_metric',
     ]);
   });
 });
@@ -364,5 +365,69 @@ describe('resolveTestMeta', () => {
     const meta = resolveTestMeta('01REQUESTED', enriched, null, { id: 139, name: 'Other' });
     expect(meta.account_id).toBe('01ACCTULID');
     expect(meta.account_name).toBe('ZURB');
+  });
+});
+
+// ─── Read-back on walkthrough screens ────────────────────────────────────────
+
+describe('walkthrough read-back', () => {
+  const test: TestShowResponse = {
+    introduction: '',
+    sections: [
+      {
+        id: '11', type: 'LikertDirectiveSection', position: 1,
+        instructions: '', stripped_instructions: 'Metric q', likert_type: 'impression',
+        variations: [], ux_metric: { id: 10, metric_type: 'sentiment' },
+      },
+      {
+        id: '22', type: 'MultipleChoiceDirectiveSection', position: 2,
+        instructions: '', stripped_instructions: 'Pick one', likert_type: '',
+        variations: [{ id: 'v', name: 'V', type: 'MultipleChoiceDirectiveSection', choices: [] }],
+        branching: [{ source: 'choice', index: 0, label: 'Yes', action: 'skip_to_question', question: 2, section_id: 33, message: null, redirect_url: null }],
+      },
+      {
+        // A click section owned by a hotspot-scored metric, with no hotspots.
+        // Its raw type is "ClickSection" — NOT one of ASSET_HEAVY_RAW_TYPES —
+        // so it renders through the normal path, which must still warn.
+        id: '33', type: 'ClickSection', position: 3,
+        instructions: '', stripped_instructions: 'Click checkout', likert_type: '',
+        variations: [{ id: 'vc', name: 'Click', type: 'ClickVariation', choices: [] }],
+        ux_metric: { id: 12, metric_type: 'success' },
+        hotspots: [],
+      },
+    ],
+  };
+
+  const screens = buildWalkthroughScreens(test);
+
+  it('resolves branch targets into screen numbering, not the API question space', () => {
+    const mc = screens[1];
+    if (mc.kind === 'question') {
+      // API says question 2; the section it names is this list's Q3.
+      expect(mc.branching?.[0].question).toBe(2);
+      expect(mc.branching?.[0].target_q_number).toBe(3);
+    }
+  });
+
+  it('warns that a hotspot-scored click section with no hotspots scores zero', () => {
+    const click = screens[2];
+    expect(click.kind).toBe('question');
+    if (click.kind === 'question') {
+      // Precondition for the bug this covers: it is not on the placeholder path.
+      expect(click.renderable).toBe('full');
+      expect(click.hotspots).toEqual([]);
+    }
+    const rendered = renderWalkthroughScreen(screens[2]).join('\n');
+    expect(rendered).toMatch(/no hotspots/);
+    expect(rendered).toMatch(/scores zero/);
+  });
+
+  it('renders the branch on a normal question screen', () => {
+    expect(renderWalkthroughScreen(screens[1]).join('\n')).toMatch(/"Yes" → Q3/);
+  });
+
+  it('keeps an empty hotspot array distinguishable from no hotspot data', () => {
+    const noData = screens[1];
+    if (noData.kind === 'question') expect(noData.hotspots).toBeUndefined();
   });
 });

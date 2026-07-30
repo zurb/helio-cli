@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildOrderBlocks, buildWalkthroughScreens, type SectionData, type TestShowResponse } from './tests.js';
+import { buildOrderBlocks, buildWalkthroughScreens, buildQuestionNumberIndex, buildBranchingSummary, type SectionData, type TestShowResponse } from './tests.js';
 
 // ─── buildOrderBlocks ────────────────────────────────────────────────────────
 // Block index and question number are separate numbering systems. A metric
@@ -96,5 +96,134 @@ describe('walkthrough type labels with degraded API data', () => {
     for (const q of questions) {
       expect(q.type_label).not.toMatch(/undefined|null/);
     }
+  });
+});
+
+// ─── buildOrderBlocks: repeated metric types ─────────────────────────────────
+// Since the 2026-07-30 API release a metric type may be on a test more than
+// once, each instance owning its own sections and score. Blocks are per
+// INSTANCE, and a repeated type can no longer be identified by `metric:<type>`.
+
+describe('buildOrderBlocks — repeated metric types', () => {
+  const metricSection = (
+    id: string,
+    position: number,
+    metricId: number,
+    metricType: string,
+  ): SectionData => ({
+    id,
+    type: 'LikertDirectiveSection',
+    position,
+    instructions: '',
+    stripped_instructions: '',
+    likert_type: '',
+    variations: [],
+    ux_metric: { id: metricId, metric_type: metricType },
+  });
+
+  it('gives each instance of a repeated type its own block', () => {
+    const blocks = buildOrderBlocks([
+      metricSection('s1', 1, 10, 'expectations'),
+      metricSection('s2', 2, 10, 'expectations'),
+      metricSection('s3', 3, 11, 'expectations'),
+      metricSection('s4', 4, 11, 'expectations'),
+    ]);
+    expect(blocks).toHaveLength(2);
+    expect(blocks.map(b => b.question_count)).toEqual([2, 2]);
+    expect(blocks.map(b => b.label)).toEqual([
+      'expectations metric #1 (2 questions)',
+      'expectations metric #2 (2 questions)',
+    ]);
+  });
+
+  it('flags repeated types as ambiguous, since reorder needs metric:<uuid>', () => {
+    const blocks = buildOrderBlocks([
+      metricSection('s1', 1, 10, 'expectations'),
+      metricSection('s2', 2, 11, 'expectations'),
+      metricSection('s3', 3, 12, 'sentiment'),
+    ]);
+    expect(blocks.map(b => b.ambiguous)).toEqual([true, true, undefined]);
+    expect(blocks.map(b => b.metric_type)).toEqual(['expectations', 'expectations', 'sentiment']);
+  });
+
+  it('leaves a type that appears once unambiguous and unnumbered', () => {
+    const blocks = buildOrderBlocks([
+      metricSection('s1', 1, 10, 'sentiment'),
+      metricSection('s2', 2, 11, 'loyalty'),
+    ]);
+    expect(blocks.map(b => b.ambiguous)).toEqual([undefined, undefined]);
+    expect(blocks.map(b => b.key)).toEqual(['metric:sentiment', 'metric:loyalty']);
+    expect(blocks[0].label).toBe('sentiment metric (1 question)');
+  });
+
+  it('falls back to collapsing by type when a payload omits the metric id', () => {
+    const blocks = buildOrderBlocks([
+      { ...metricSection('s1', 1, 0, 'sentiment'), ux_metric: { metric_type: 'sentiment' } },
+      { ...metricSection('s2', 2, 0, 'sentiment'), ux_metric: { metric_type: 'sentiment' } },
+    ]);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].ambiguous).toBeUndefined();
+  });
+});
+
+// ─── Branch target numbering ─────────────────────────────────────────────────
+// Two numbering systems: everything the CLI prints counts ALL sections, while a
+// branch's `question` counts researcher questions only. Resolving the branch's
+// section_id against the CLI's own listing sidesteps the mismatch.
+
+describe('buildQuestionNumberIndex / buildBranchingSummary', () => {
+  const metric = (id: string, position: number): SectionData => ({
+    id, type: 'LikertDirectiveSection', position,
+    instructions: '', stripped_instructions: '', likert_type: '',
+    variations: [], ux_metric: { id: 10, metric_type: 'sentiment' },
+  });
+  const question = (id: string, position: number, extra: Record<string, unknown> = {}): SectionData => ({
+    id, type: 'MultipleChoiceDirectiveSection', position,
+    instructions: '', stripped_instructions: `Q@${position}`, likert_type: '',
+    variations: [], ...extra,
+  });
+
+  // Metric at pos 1 means the API calls the free_response "question 2" while
+  // the CLI lists it as Q3 — the drift this index exists to absorb.
+  const sections: SectionData[] = [
+    metric('11', 1),
+    question('22', 2, {
+      branching: [
+        { source: 'choice', index: 0, label: 'Yes', action: 'skip_to_question', question: 2, section_id: 33, message: null, redirect_url: null },
+        { source: 'choice', index: 1, label: 'No', action: 'end_test', question: null, section_id: null, message: 'Not a fit', redirect_url: null },
+      ],
+    }),
+    question('33', 3),
+  ];
+
+  it('numbers every section, metric sections included', () => {
+    expect([...buildQuestionNumberIndex(sections).entries()]).toEqual([[11, 1], [22, 2], [33, 3]]);
+  });
+
+  it('resolves a branch target into the CLI listing, not the API question space', () => {
+    const [skip] = buildBranchingSummary(sections) as any[];
+    // The API says question 2; the section it names is the CLI's Q3.
+    expect(skip.question).toBe(2);
+    expect(skip.target_question_number).toBe(3);
+    expect(skip.from_question_number).toBe(2);
+    expect(skip.from_section_id).toBe('22');
+  });
+
+  it('leaves target_question_number null for end_test', () => {
+    const [, end] = buildBranchingSummary(sections) as any[];
+    expect(end.action).toBe('end_test');
+    expect(end.target_question_number).toBeNull();
+  });
+
+  it('returns null rather than a wrong number when the target is absent', () => {
+    const orphan = [question('22', 1, {
+      branching: [{ source: 'choice', index: 0, label: 'Y', action: 'skip_to_question', question: 9, section_id: 999, message: null, redirect_url: null }],
+    })];
+    expect((buildBranchingSummary(orphan) as any[])[0].target_question_number).toBeNull();
+  });
+
+  it('handles an empty section list', () => {
+    expect(buildQuestionNumberIndex(undefined).size).toBe(0);
+    expect(buildBranchingSummary(undefined)).toEqual([]);
   });
 });

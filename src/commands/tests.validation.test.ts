@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   validateQuestions,
   validateUxMetrics,
+  uxMetricWarnings,
   formatValidationErrors,
   parsePositiveInt,
   parseJsonArrayFlag,
@@ -356,7 +357,23 @@ describe('validateQuestions — click_test', () => {
     const errors = validateQuestions(
       q({ type: 'click_test', asset_id: 1, hotspots: [{ x: 1.5, y: 0.2, width: 0, height: 0.1 }] }),
     );
-    expect(fields(errors)).toEqual(['hotspots[0].x', 'hotspots[0].width']);
+    expect(fields(errors)).toEqual(['hotspots[0].x', 'hotspots[0].width', 'hotspots[0]']);
+  });
+
+  it('rejects a hotspot that extends past the image', () => {
+    const errors = validateQuestions(
+      q({ type: 'click_test', asset_id: 1, hotspots: [{ x: 0.9, y: 0.2, width: 0.3, height: 0.1 }] }),
+    );
+    expect(fields(errors)).toEqual(['hotspots[0]']);
+    expect(errors[0].message).toMatch(/extends past the image/i);
+  });
+
+  it('accepts a hotspot flush against the right and bottom edges', () => {
+    expect(
+      validateQuestions(
+        q({ type: 'click_test', asset_id: 1, hotspots: [{ x: 0.8, y: 0.9, width: 0.2, height: 0.1 }] }),
+      ),
+    ).toEqual([]);
   });
 
   it('rejects invalid priority', () => {
@@ -374,28 +391,36 @@ describe('validateUxMetrics', () => {
     'sentiment', 'feeling', 'appeal', 'reaction', 'comprehension', 'frequency',
     'loyalty', 'intent', 'desirability', 'usefulness', 'expectations',
   ];
-  const excluded = ['brand_score', 'engagement', 'success', 'completion', 'usability', 'satisfaction', 'effort'];
+  // Only the two Figma-prototype metrics remain uncreatable; the click-backed
+  // four and brand_score became creatable with the 2026-07-30 API release.
+  const excluded = ['completion', 'effort'];
 
   it('accepts every creatable metric', () => {
     expect(validateUxMetrics(creatable)).toEqual([]);
   });
 
-  it.each(excluded)('rejects excluded metric %s with the click-test/prototype explanation', m => {
+  it.each(excluded)('rejects excluded metric %s naming the Figma prototype reason', m => {
     const errors = validateUxMetrics([m]);
     expect(errors).toHaveLength(1);
-    expect(errors[0].message).toMatch(/click tests or prototypes/);
+    expect(errors[0].message).toMatch(/Figma prototype section/);
   });
+
+  it.each(['engagement', 'success', 'usability', 'satisfaction', 'brand_score'])(
+    'accepts %s, creatable since the 2026-07-30 API release',
+    m => {
+      // Bare (no overrides) is accepted here — what these need to actually
+      // score is enforced on the object form, which is where you supply it.
+      expect(validateUxMetrics([m])).toEqual([]);
+    },
+  );
 
   it('rejects unknown metric names', () => {
     const errors = validateUxMetrics(['delight']);
     expect(errors[0].message).toMatch(/Unknown metric type "delight"/);
   });
 
-  it('rejects duplicates', () => {
-    const errors = validateUxMetrics(['sentiment', 'loyalty', 'sentiment']);
-    expect(errors).toHaveLength(1);
-    expect(errors[0].message).toMatch(/Duplicate metric type "sentiment"/);
-    expect(errors[0].field).toBe('ux_metrics[2]');
+  it('allows a repeated metric type — each instance is scored separately', () => {
+    expect(validateUxMetrics(['expectations', 'sentiment', 'expectations'])).toEqual([]);
   });
 
   it('rejects non-array input', () => {
@@ -435,17 +460,90 @@ describe('validateUxMetrics — object form', () => {
     expect(errors[0].message).toMatch(/Unknown metric type "delight"/);
   });
 
-  it('detects duplicates across string and object entries', () => {
-    const errors = validateUxMetrics(['sentiment', { type: 'sentiment' }]);
-    expect(errors).toHaveLength(1);
-    expect(errors[0].message).toMatch(/Duplicate metric type "sentiment"/);
-    expect(errors[0].field).toBe('ux_metrics[1]');
+  it('allows the same type across string and object entries', () => {
+    expect(validateUxMetrics(['sentiment', { type: 'sentiment', context: 'the checkout flow' }])).toEqual([]);
   });
 
-  it('does not report duplicates for repeated invalid entries', () => {
+  it('reports every invalid entry', () => {
     const errors = validateUxMetrics([{}, {}]);
     expect(errors).toHaveLength(2);
     expect(errors.every(e => /string or an object/.test(e.message))).toBe(true);
+  });
+});
+
+// ─── validateUxMetrics: click-backed and brand_score overrides ───────────────
+
+describe('validateUxMetrics — section overrides', () => {
+  const hotspot = { x: 0.4, y: 0.5, width: 0.2, height: 0.1 };
+
+  it('accepts a success metric with an image and a hotspot', () => {
+    expect(
+      validateUxMetrics([{ type: 'success', sections: [{ asset_id: '7', hotspots: [hotspot] }] }]),
+    ).toEqual([]);
+  });
+
+  it('does not error on a click section without hotspots — that is a warning', () => {
+    // The API accepts it and you can add hotspots with edit-question before
+    // sending; `tests validate` is the gate. See uxMetricWarnings.
+    expect(validateUxMetrics([{ type: 'success', sections: [{ asset_id: '7' }] }])).toEqual([]);
+  });
+
+  it('validates hotspot geometry inside a metric override', () => {
+    const errors = validateUxMetrics([
+      { type: 'success', sections: [{ hotspots: [{ x: 0.9, y: 0.1, width: 0.3, height: 0.1 }] }] },
+    ]);
+    expect(errors.some(e => /extends past the image/i.test(e.message))).toBe(true);
+  });
+
+  it('rejects hotspots on a section that is not a click test', () => {
+    const errors = validateUxMetrics([
+      { type: 'satisfaction', sections: [{ hotspots: [hotspot] }, { hotspots: [hotspot] }] },
+    ]);
+    expect(errors.some(e => /only apply to click test sections/.test(e.message))).toBe(true);
+  });
+
+  it('rejects hotspots on a metric with no click sections at all', () => {
+    const errors = validateUxMetrics([{ type: 'sentiment', sections: [{ hotspots: [hotspot] }] }]);
+    expect(errors[0].message).toMatch(/sentiment has none/);
+  });
+
+  it('accepts brand_score with choices and a brand marked', () => {
+    expect(
+      validateUxMetrics([
+        { type: 'brand_score', sections: [{ choices: ['Helio', 'Maze', 'Other'], brand_choice: 0 }] },
+      ]),
+    ).toEqual([]);
+  });
+
+  it('rejects a brand_choice outside the supplied choice list', () => {
+    const errors = validateUxMetrics([
+      { type: 'brand_score', sections: [{ choices: ['Helio', 'Maze'], brand_choice: 5 }] },
+    ]);
+    expect(errors[0].message).toMatch(/0-based index into this section's 2 choices/);
+  });
+
+  it('rejects brand_choice on the impressions section', () => {
+    const errors = validateUxMetrics([
+      { type: 'brand_score', sections: [{}, { brand_choice: 0 }] },
+    ]);
+    expect(errors[0].message).toMatch(/market recognition section \(sections\[0\]\)/);
+  });
+
+  it('rejects brand_choice on a metric that has no brand', () => {
+    const errors = validateUxMetrics([{ type: 'sentiment', sections: [{ brand_choice: 0 }] }]);
+    expect(errors[0].message).toMatch(/only applies to brand_score, not sentiment/);
+  });
+
+  it('rejects a market recognition list shorter than the minimum', () => {
+    const errors = validateUxMetrics([
+      { type: 'brand_score', sections: [{ choices: ['Helio'], brand_choice: 0 }] },
+    ]);
+    expect(errors.some(e => /at least 2 choices/.test(e.message))).toBe(true);
+  });
+
+  it('rejects more section overrides than the metric has sections', () => {
+    const errors = validateUxMetrics([{ type: 'sentiment', sections: [{}, {}] }]);
+    expect(errors[0].message).toMatch(/sentiment has 1 section/);
   });
 });
 
@@ -551,5 +649,83 @@ describe('parsePositiveInt', () => {
 
   it.each(['0', '-5', '1.5', 'abc', 'NaN', 'Infinity'])('rejects %s', v => {
     expect(() => parsePositiveInt(v, '--n')).toThrow(/positive integer/);
+  });
+});
+
+// ─── uxMetricWarnings ────────────────────────────────────────────────────────
+// Metrics that create fine and measure nothing. Warnings, not errors: the API
+// accepts them, and the missing piece can be filled in with edit-question.
+
+describe('uxMetricWarnings', () => {
+  const hotspot = { x: 0.4, y: 0.5, width: 0.2, height: 0.1 };
+
+  it('warns on a bare click-backed metric, the easiest way to score zero', () => {
+    const warnings = uxMetricWarnings(['success']);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/success scores clicks/);
+    expect(warnings[0]).toMatch(/sections\[0\]/);
+  });
+
+  it('names every unhotspotted section of a multi-click metric', () => {
+    const warnings = uxMetricWarnings([
+      { type: 'usability', sections: [{ hotspots: [hotspot] }, {}, { hotspots: [hotspot] }] },
+    ]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/sections\[1\]/);
+    expect(warnings[0]).not.toMatch(/sections\[0\]/);
+  });
+
+  it('stays quiet once every click section has hotspots', () => {
+    expect(
+      uxMetricWarnings([{ type: 'success', sections: [{ asset_id: '7', hotspots: [hotspot] }] }]),
+    ).toEqual([]);
+  });
+
+  it('treats an empty hotspot array as no hotspots', () => {
+    expect(uxMetricWarnings([{ type: 'success', sections: [{ hotspots: [] }] }])).toHaveLength(1);
+  });
+
+  it('warns when brand_score has no brand marked', () => {
+    const warnings = uxMetricWarnings(['brand_score']);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/recognition score/);
+  });
+
+  it('stays quiet once brand_choice is set', () => {
+    expect(
+      uxMetricWarnings([
+        { type: 'brand_score', sections: [{ choices: ['Helio', 'Maze'], brand_choice: 1 }] },
+      ]),
+    ).toEqual([]);
+  });
+
+  it('says nothing about metrics that need no overrides', () => {
+    expect(uxMetricWarnings(['sentiment', 'loyalty', { type: 'expectations' }])).toEqual([]);
+  });
+
+  it('warns once per instance of a repeated metric type', () => {
+    expect(uxMetricWarnings(['success', 'success'])).toHaveLength(2);
+  });
+});
+
+// ─── Inherited object keys ───────────────────────────────────────────────────
+// The excluded/valid metric tables are plain objects, so a bare OBJ[key] lookup
+// would treat "constructor" / "toString" / "__proto__" as present.
+
+describe('validateUxMetrics — prototype keys', () => {
+  it.each(['constructor', 'toString', '__proto__', 'hasOwnProperty'])(
+    'reports %s as an unknown metric type, not as an excluded one',
+    name => {
+      const errors = validateUxMetrics([name]);
+      expect(errors).toHaveLength(1);
+      expect(errors[0].message.startsWith(`Unknown metric type "${name}"`)).toBe(true);
+      // The tell of a bare OBJ[key] lookup: the inherited function stringified
+      // into the message where the exclusion reason should be.
+      expect(errors[0].message).not.toMatch(/native code|\[object Object\]/);
+    },
+  );
+
+  it('says nothing about prototype keys in uxMetricWarnings', () => {
+    expect(uxMetricWarnings(['constructor', 'toString'])).toEqual([]);
   });
 });
