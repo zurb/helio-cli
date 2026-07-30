@@ -231,6 +231,8 @@ export interface TestShowResponse {
   account_name?: string;
   introduction: string;
   sections: SectionData[];
+  /** Present since the 2026-07-30 API release; null when the test has no quota. */
+  audience?: AudienceData | null;
   [key: string]: unknown;
 }
 
@@ -289,6 +291,57 @@ export interface SectionData {
   stripped_instructions: string;
   likert_type: string;
   variations: VariationData[];
+  /** Read-back of what `branching` writes. Omitted when the section has none. */
+  branching?: BranchingData[];
+  /** Click sections only. Empty array = engagement heatmap, no hotspot scoring. */
+  hotspots?: HotspotData[];
+  [key: string]: unknown;
+}
+
+/**
+ * Branch definitions in the vocabulary writes take, not the model's
+ * (`action: "target"`, `target_id`). Present since the 2026-07-30 API release.
+ */
+export interface BranchingData {
+  /** What the branch hangs off. The editor branches off all three. */
+  source: 'choice' | 'variation' | 'hotspot';
+  /** 0-based within its own list; for source "choice" this is the index writes take. */
+  index: number;
+  label: string | null;
+  action: string;
+  /** 1-based question number, counting researcher questions only. */
+  question: number | null;
+  section_id: number | null;
+  message: string | null;
+  redirect_url: string | null;
+  [key: string]: unknown;
+}
+
+export interface HotspotData {
+  id: number;
+  variation_id: number;
+  name: string | null;
+  number: number;
+  priority: string | null;
+  /** All four are relative to the image (0-1); x/y are the top-left corner. */
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  [key: string]: unknown;
+}
+
+/** Audience config of the test's current (most recent) quota. */
+export interface AudienceData {
+  type: string;
+  target_size: number | null;
+  status: string | null;
+  segments: { id: string; name: string; source: string }[];
+  customer_lists: { id: string; name: string }[];
+  demographics: Record<string, unknown>;
+  screener: { id: string; name: string } | null;
+  allow_retake: boolean;
+  exclude_test_ids: string[];
   [key: string]: unknown;
 }
 
@@ -422,39 +475,80 @@ export interface OrderBlock {
   question_number: number;
   /** How many questions this block covers (>1 only for multi-question metrics). */
   question_count: number;
+  /** Present on metric blocks only. */
+  metric_type?: string;
+  /**
+   * This metric type is on the test more than once, so `key` cannot identify
+   * the block — reorder needs `metric:<uuid>`, which GET /tests/:id does not
+   * expose. Set only on metric blocks.
+   */
+  ambiguous?: true;
 }
 
 /**
- * Group a test's sections into reorderable blocks, collapsing all sections that
- * share a ux_metric type into a single `metric:<type>` block.
+ * Group a test's sections into reorderable blocks. One block per UX metric
+ * INSTANCE, not per type — a type may legitimately appear on a test more than
+ * once (a multi-screen flow measuring `expectations` on every screen), and each
+ * instance owns its own sections and score.
  *
  * Blocks and questions are DIFFERENT numbering systems: a metric block is one
  * block but may span several questions, so a block's index is NOT the question
  * number that `--position` and branching `question` take. Callers must keep
  * them distinct — block index drives `--order`, `question_number` is what a
  * human acts on.
+ *
+ * `ambiguous` marks an instance whose type is on the test more than once. The
+ * API needs `metric:<uuid>` for those, and GET /tests/:id exposes only the
+ * metric's numeric id — so the key here is not directly usable and the caller
+ * has to say so rather than print a command that will 400.
  */
 export function buildOrderBlocks(rawSections: SectionData[]): OrderBlock[] {
   const sections = [...rawSections].sort((a, b) => a.position - b.position);
   const blocks: OrderBlock[] = [];
-  const seenMetrics = new Set<string>();
+  const seenMetrics = new Set<string | number>();
+
+  const metricOf = (sec: SectionData) =>
+    (sec as Record<string, unknown>).ux_metric as { metric_type: string; id?: string | number } | null;
+
+  // Instances are told apart by the metric's own id; fall back to the type when
+  // a payload omits it, which collapses instances but never invents blocks.
+  const instanceKey = (m: { metric_type: string; id?: string | number }) => m.id ?? m.metric_type;
+
+  const typeCounts = new Map<string, Set<string | number>>();
+  for (const sec of sections) {
+    const m = metricOf(sec);
+    if (!m?.metric_type) continue;
+    const set = typeCounts.get(m.metric_type) ?? new Set();
+    set.add(instanceKey(m));
+    typeCounts.set(m.metric_type, set);
+  }
 
   for (let qi = 0; qi < sections.length; qi++) {
     const s = sections[qi];
-    const uxMetric = (s as Record<string, unknown>).ux_metric as { metric_type: string } | null;
+    const uxMetric = metricOf(s);
     if (uxMetric?.metric_type) {
       const metricType = uxMetric.metric_type;
-      if (seenMetrics.has(metricType)) continue;
-      seenMetrics.add(metricType);
+      const key = instanceKey(uxMetric);
+      if (seenMetrics.has(key)) continue;
+      seenMetrics.add(key);
       const count = sections.filter(sec => {
-        const m = (sec as Record<string, unknown>).ux_metric as { metric_type: string } | null;
-        return m?.metric_type === metricType;
+        const m = metricOf(sec);
+        return m?.metric_type && instanceKey(m) === key;
       }).length;
+      const repeated = (typeCounts.get(metricType)?.size ?? 1) > 1;
+      const instanceNumber = repeated
+        ? [...(typeCounts.get(metricType) ?? [])].indexOf(key) + 1
+        : undefined;
       blocks.push({
         key: `metric:${metricType}`,
-        label: `${metricType} metric (${count} question${count === 1 ? '' : 's'})`,
+        label:
+          `${metricType} metric` +
+          (instanceNumber ? ` #${instanceNumber}` : '') +
+          ` (${count} question${count === 1 ? '' : 's'})`,
         question_number: qi + 1,
         question_count: count,
+        metric_type: metricType,
+        ambiguous: repeated || undefined,
       });
     } else {
       blocks.push({
@@ -546,8 +640,145 @@ function printSectionQuestions(sections: SectionData[]): void {
       }
     }
 
+    printHotspots(s);
+    printBranching(s);
+
     console.log();
   }
+}
+
+/**
+ * Hotspots are what a click-backed metric scores against, so "none" is the
+ * finding worth surfacing: on a metric-owned click section it means the metric
+ * scores zero, while on a standalone click test it just means engagement.
+ */
+function printHotspots(s: SectionData): void {
+  if (!Array.isArray(s.hotspots)) return;
+
+  const metricType = (s as { ux_metric?: { metric_type?: string } }).ux_metric?.metric_type;
+  if (s.hotspots.length === 0) {
+    const scored = metricType && UX_METRIC_TYPES[metricType]?.hotspot_scored;
+    console.log(
+      scored
+        ? `      \x1b[33m⚠ No hotspots\x1b[0m — ${metricType} scores clicks inside hotspots, so this section scores zero`
+        : `      \x1b[90mNo hotspots (engagement heatmap)\x1b[0m`,
+    );
+    return;
+  }
+
+  console.log(`      Hotspots (${s.hotspots.length}):`);
+  for (const h of [...s.hotspots].sort((a, b) => a.number - b.number)) {
+    const name = h.name || `hotspot ${h.number}`;
+    const priority = h.priority ? ` [${h.priority}]` : '';
+    console.log(
+      `        ${h.number}. ${name}${priority}  \x1b[90m${fmtBox(h)}\x1b[0m`,
+    );
+  }
+}
+
+function fmtBox(h: HotspotData): string {
+  const pct = (n: number) => `${Math.round(n * 100)}%`;
+  return `x ${pct(h.x)}, y ${pct(h.y)}, ${pct(h.width)}×${pct(h.height)}`;
+}
+
+function printBranching(s: SectionData): void {
+  if (!Array.isArray(s.branching) || s.branching.length === 0) return;
+
+  console.log(`      Branching:`);
+  for (const b of s.branching) {
+    const from = b.label ? `"${b.label}"` : `${b.source} ${b.index}`;
+    const to =
+      b.action === 'end_test'
+        ? b.message
+          ? `end test — "${b.message}"`
+          : b.redirect_url
+            ? `end test → ${b.redirect_url}`
+            : 'end test'
+        : b.question != null
+          ? `skip to Q${b.question}`
+          : `skip to section ${b.section_id ?? '?'}`;
+    console.log(`        ${from} → ${to}`);
+  }
+}
+
+/**
+ * Branching and hotspots for a launched test, where report data supplies the
+ * questions and carries neither. Only sections that have something to say.
+ */
+function printStructureNotes(sections: SectionData[] | undefined): void {
+  const withNotes = [...(sections ?? [])]
+    .sort((a, b) => a.position - b.position)
+    .filter(s => Array.isArray(s.branching) || Array.isArray(s.hotspots));
+  if (!withNotes.length) return;
+
+  const ordered = [...(sections ?? [])].sort((a, b) => a.position - b.position);
+  console.log(`\x1b[1mStructure\x1b[0m`);
+  for (const s of withNotes) {
+    const q = ordered.indexOf(s) + 1;
+    console.log(`  \x1b[1mQ${q}.\x1b[0m ${s.stripped_instructions || stripHtml(s.instructions || '')}`);
+    printHotspots(s);
+    printBranching(s);
+  }
+  console.log();
+}
+
+/** Flat, question-numbered branching for JSON consumers. */
+export function buildBranchingSummary(sections: SectionData[] | undefined): unknown[] {
+  const ordered = [...(sections ?? [])].sort((a, b) => a.position - b.position);
+  // `section_id` on a branch is its TARGET, not the section it hangs off, so
+  // the source section is named separately rather than shadowing it.
+  return ordered.flatMap((s, i) =>
+    (s.branching ?? []).map(b => ({ question_number: i + 1, from_section_id: s.id, ...b })),
+  );
+}
+
+export function buildHotspotSummary(sections: SectionData[] | undefined): unknown[] {
+  const ordered = [...(sections ?? [])].sort((a, b) => a.position - b.position);
+  return ordered
+    .filter(s => Array.isArray(s.hotspots))
+    .map((s, _i) => {
+      const metricType = (s as { ux_metric?: { metric_type?: string } }).ux_metric?.metric_type ?? null;
+      return {
+        question_number: ordered.indexOf(s) + 1,
+        section_id: s.id,
+        ux_metric: metricType,
+        // A hotspot-scored metric with no hotspots scores zero — the one thing
+        // a pre-launch reviewer needs to catch here.
+        scores_zero: Boolean(metricType && UX_METRIC_TYPES[metricType]?.hotspot_scored && s.hotspots?.length === 0),
+        hotspots: s.hotspots ?? [],
+      };
+    });
+}
+
+/** Audience config of the current quota, in the vocabulary POST /tests takes. */
+function printAudience(audience: AudienceData | null | undefined): void {
+  if (!audience) return;
+
+  console.log(`\x1b[1mAudience\x1b[0m`);
+  const size = audience.target_size != null ? `, ${audience.target_size} participants` : '';
+  const status = audience.status ? ` (${audience.status})` : '';
+  console.log(`  ${audience.type}${size}${status}`);
+
+  for (const segment of audience.segments ?? []) {
+    console.log(`  segment: ${segment.name} \x1b[90m[${segment.source}]\x1b[0m`);
+  }
+  for (const list of audience.customer_lists ?? []) {
+    console.log(`  customer list: ${list.name}`);
+  }
+
+  const demographics = Object.entries(audience.demographics ?? {}).filter(
+    ([, v]) => v != null && (!Array.isArray(v) || v.length > 0),
+  );
+  for (const [key, value] of demographics) {
+    console.log(`  ${key}: ${Array.isArray(value) ? value.join(', ') : String(value)}`);
+  }
+
+  if (audience.screener) console.log(`  screener: ${audience.screener.name}`);
+  if (audience.allow_retake) console.log(`  retakes allowed`);
+  if (audience.exclude_test_ids?.length) {
+    console.log(`  excludes participants from ${audience.exclude_test_ids.length} test(s)`);
+  }
+  console.log();
 }
 
 function buildQuestionsFromSections(sections: SectionData[] | undefined): unknown[] {
@@ -693,8 +924,25 @@ const VALID_SCALE_TYPES = [
   'impression', 'expectations', 'usefulness', 'difficulty', 'likelihood', 'custom',
 ];
 
-// UX metric types that can be auto-generated via the API
-const UX_METRIC_TYPES: Record<string, { description: string; section_count: number; section_types: string; default_instructions: string }> = {
+// UX metric types that can be auto-generated via the API.
+//
+// `click_sections` lists the 0-based indexes of sections the template builds as
+// click tests — those are the ones that take an `asset_id` and `hotspots`
+// override. `hotspot_scored` marks metrics whose score comes from clicks landing
+// inside a hotspot, so a click section with none scores zero however
+// participants behave; the API refuses to launch those.
+const UX_METRIC_TYPES: Record<string, {
+  description: string;
+  section_count: number;
+  section_types: string;
+  default_instructions: string;
+  click_sections?: number[];
+  hotspot_scored?: boolean;
+  /** 0-based section index carrying the "this choice is my brand" flag. */
+  brand_choice_section?: number;
+  /** Section index -> minimum length, for sections whose choice list you may resize. */
+  resizable_choice_sections?: Record<number, number>;
+}> = {
   sentiment: {
     description: 'Measures users\' emotional reactions and satisfaction',
     section_count: 1,
@@ -761,13 +1009,56 @@ const UX_METRIC_TYPES: Record<string, { description: string; section_count: numb
     section_types: 'FreeResponse + Likert (expectations)',
     default_instructions: 'What did you expect [product] to do before using it? + How well did [product] meet your expectations?',
   },
+  engagement: {
+    description: 'Measures active and meaningful product interactions',
+    section_count: 1,
+    section_types: 'ClickTest',
+    default_instructions: 'Click where you would go first on this page.',
+    click_sections: [0],
+    hotspot_scored: true,
+  },
+  success: {
+    description: 'Measures achievement of intended user goals',
+    section_count: 1,
+    section_types: 'ClickTest',
+    default_instructions: 'Click where you would go to [take action] on this page.',
+    click_sections: [0],
+    hotspot_scored: true,
+  },
+  usability: {
+    description: 'Measures ease of learning and effective product usage',
+    section_count: 3,
+    section_types: 'ClickTest x3 (one task per section)',
+    default_instructions: 'Click where you would go to [take action] on this page. (x3)',
+    click_sections: [0, 1, 2],
+    hotspot_scored: true,
+  },
+  satisfaction: {
+    description: 'Measures satisfaction after completing specific tasks',
+    section_count: 2,
+    section_types: 'ClickTest + Likert (impression)',
+    default_instructions: 'Click where you would go to find the contact information for this company. + How did you feel about completing this task?',
+    click_sections: [0],
+    hotspot_scored: true,
+  },
+  brand_score: {
+    description: 'Measures brand recognition and customer advocacy',
+    section_count: 3,
+    section_types: 'MultipleChoice (market recognition, resizable) + MultipleChoice (8 impressions, fixed) + NPS',
+    default_instructions: 'Which of these apps do you currently have downloaded on your device? + What impressions does this page give you? + How likely is it that you would recommend our product to a friend or colleague?',
+    brand_choice_section: 0,
+    resizable_choice_sections: { 0: 2 },
+  },
 };
 
 const VALID_UX_METRIC_TYPE_NAMES = Object.keys(UX_METRIC_TYPES);
 
-const EXCLUDED_UX_METRIC_TYPES = [
-  'brand_score', 'engagement', 'success', 'completion', 'usability', 'satisfaction', 'effort',
-];
+// Types the API still can't build, with the reason each one is out. Mirrors
+// EXCLUDED_UX_METRIC_TYPES in Api::Public::V1::GenericTestsController.
+const EXCLUDED_UX_METRIC_TYPES: Record<string, string> = {
+  completion: 'is built from a Figma prototype section, which cannot be created via the API',
+  effort: 'is built from a Figma prototype section, which cannot be created via the API',
+};
 
 export function validateUxMetrics(metrics: unknown): ValidationError[] {
   const errors: ValidationError[] = [];
@@ -777,12 +1068,9 @@ export function validateUxMetrics(metrics: unknown): ValidationError[] {
     return errors;
   }
 
-  const types: (string | undefined)[] = [];
-
   for (let i = 0; i < metrics.length; i++) {
     const entry = metrics[i];
     const m: unknown = typeof entry === 'string' ? entry : (entry as { type?: unknown } | null)?.type;
-    types.push(typeof m === 'string' ? m : undefined);
 
     if (typeof m !== 'string' || !m) {
       errors.push({
@@ -793,32 +1081,193 @@ export function validateUxMetrics(metrics: unknown): ValidationError[] {
       continue;
     }
 
-    if (EXCLUDED_UX_METRIC_TYPES.includes(m)) {
+    const excludedReason = EXCLUDED_UX_METRIC_TYPES[m];
+    if (excludedReason) {
       errors.push({
         question: 0,
         field: `ux_metrics[${i}]`,
-        message: `"${m}" requires click tests or prototypes and cannot be created via the API. Valid types: ${VALID_UX_METRIC_TYPE_NAMES.join(', ')}`,
+        message: `"${m}" ${excludedReason}. Valid types: ${VALID_UX_METRIC_TYPE_NAMES.join(', ')}`,
       });
-    } else if (!VALID_UX_METRIC_TYPE_NAMES.includes(m)) {
+      continue;
+    }
+
+    const spec = UX_METRIC_TYPES[m];
+    if (!spec) {
       errors.push({
         question: 0,
         field: `ux_metrics[${i}]`,
         message: `Unknown metric type "${m}". Valid types: ${VALID_UX_METRIC_TYPE_NAMES.join(', ')}`,
       });
+      continue;
+    }
+
+    if (typeof entry === 'object' && entry !== null) {
+      validateUxMetricSectionOverrides(
+        (entry as UxMetricObjectInput).sections,
+        m,
+        spec,
+        `ux_metrics[${i}]`,
+        errors,
+      );
     }
   }
 
-  const seen = new Set<string>();
-  for (let i = 0; i < types.length; i++) {
-    const m = types[i];
-    if (!m) continue;
-    if (seen.has(m)) {
-      errors.push({ question: 0, field: `ux_metrics[${i}]`, message: `Duplicate metric type "${m}"` });
-    }
-    seen.add(m);
-  }
+  // Repeated metric types are deliberately allowed: every instance owns its own
+  // sections and is scored independently, which is what a multi-screen flow
+  // measuring `expectations` on each screen needs. The web editor has always
+  // permitted this; the API used to reject it and no longer does.
 
   return errors;
+}
+
+/**
+ * Metrics that will launch but measure nothing as configured. Not errors: the
+ * API accepts them at create, and you can still fill in the missing piece with
+ * `edit-question` before sending. `tests validate` is what finally refuses.
+ *
+ * The bare string form (`--ux-metrics success`) is the easy way to hit this —
+ * it looks complete and scores zero.
+ */
+export function uxMetricWarnings(metrics: unknown): string[] {
+  if (!Array.isArray(metrics)) return [];
+
+  const warnings: string[] = [];
+  for (const entry of metrics) {
+    const type = typeof entry === 'string' ? entry : (entry as { type?: unknown } | null)?.type;
+    if (typeof type !== 'string') continue;
+    const spec = UX_METRIC_TYPES[type];
+    if (!spec) continue;
+
+    const sections = (typeof entry === 'object' && entry !== null
+      ? (entry as UxMetricObjectInput).sections
+      : undefined) ?? [];
+
+    if (spec.hotspot_scored) {
+      const missing = (spec.click_sections ?? []).filter(idx => {
+        const o = sections[idx] as Record<string, unknown> | undefined;
+        return !Array.isArray(o?.hotspots) || (o.hotspots as unknown[]).length === 0;
+      });
+      if (missing.length) {
+        warnings.push(
+          `${type} scores clicks that land inside a hotspot — sections[${missing.join('], sections[')}] have none and will score zero. Add hotspots (and an image asset_id) via --ux-metrics-json, or with edit-question --hotspots before sending.`,
+        );
+      }
+    }
+
+    if (spec.brand_choice_section !== undefined) {
+      const o = sections[spec.brand_choice_section] as Record<string, unknown> | undefined;
+      if (o?.brand_choice === undefined) {
+        warnings.push(
+          `${type} reads its recognition score off the choice flagged as your brand — none is marked, so it will score zero. Set brand_choice on sections[${spec.brand_choice_section}], or use edit-question --brand-choice before sending.`,
+        );
+      }
+    }
+  }
+  return warnings;
+}
+
+/**
+ * Per-section overrides on the UX metric object form. Beyond shape, these catch
+ * the two ways an override silently produces a metric that scores zero: a
+ * hotspot-scored click section with no hotspots, and a brand_score whose brand
+ * choice is never marked.
+ */
+function validateUxMetricSectionOverrides(
+  sections: unknown,
+  metricType: string,
+  spec: (typeof UX_METRIC_TYPES)[string],
+  field: string,
+  errors: ValidationError[],
+): void {
+  if (sections === undefined) return;
+
+  if (!Array.isArray(sections)) {
+    errors.push({ question: 0, field: `${field}.sections`, message: 'Must be an array of section override objects' });
+    return;
+  }
+
+  if (sections.length > spec.section_count) {
+    errors.push({
+      question: 0,
+      field: `${field}.sections`,
+      message: `${sections.length} section overrides supplied but ${metricType} has ${spec.section_count} section${spec.section_count === 1 ? '' : 's'}`,
+    });
+    return;
+  }
+
+  const clickSections = spec.click_sections ?? [];
+
+  for (let s = 0; s < sections.length; s++) {
+    const overrides = sections[s] as Record<string, unknown> | null;
+    const sectionField = `${field}.sections[${s}]`;
+
+    if (!overrides || typeof overrides !== 'object' || Array.isArray(overrides)) {
+      errors.push({ question: 0, field: sectionField, message: 'Must be an object' });
+      continue;
+    }
+
+    if (overrides.hotspots !== undefined) {
+      if (!clickSections.includes(s)) {
+        errors.push({
+          question: 0,
+          field: `${sectionField}.hotspots`,
+          message: clickSections.length
+            ? `hotspots only apply to click test sections — on ${metricType} those are sections[${clickSections.join('], sections[')}]`
+            : `hotspots only apply to click test sections, and ${metricType} has none`,
+        });
+      } else if (!Array.isArray(overrides.hotspots)) {
+        errors.push({ question: 0, field: `${sectionField}.hotspots`, message: 'Must be an array of hotspot objects' });
+      } else {
+        validateHotspots(overrides.hotspots, 0, `${sectionField}.hotspots`, errors);
+      }
+    }
+
+    if (overrides.choices !== undefined) {
+      if (!Array.isArray(overrides.choices)) {
+        errors.push({ question: 0, field: `${sectionField}.choices`, message: 'Must be an array of strings' });
+      } else {
+        validateStringItems(overrides.choices, `${sectionField}.choices`, 0, errors);
+        const min = spec.resizable_choice_sections?.[s];
+        if (min !== undefined && overrides.choices.length < min) {
+          errors.push({
+            question: 0,
+            field: `${sectionField}.choices`,
+            message: `Needs at least ${min} choices`,
+          });
+        }
+      }
+    }
+
+    if (overrides.brand_choice !== undefined) {
+      if (spec.brand_choice_section !== s) {
+        errors.push({
+          question: 0,
+          field: `${sectionField}.brand_choice`,
+          message: spec.brand_choice_section === undefined
+            ? `brand_choice only applies to brand_score, not ${metricType}`
+            : `brand_choice only applies to the ${metricType} market recognition section (sections[${spec.brand_choice_section}])`,
+        });
+      } else if (!Number.isInteger(overrides.brand_choice)) {
+        errors.push({ question: 0, field: `${sectionField}.brand_choice`, message: 'Must be a 0-based choice index' });
+      } else {
+        const idx = overrides.brand_choice as number;
+        const choiceCount = Array.isArray(overrides.choices) ? overrides.choices.length : undefined;
+        if (idx < 0 || (choiceCount !== undefined && idx >= choiceCount)) {
+          errors.push({
+            question: 0,
+            field: `${sectionField}.brand_choice`,
+            message: choiceCount === undefined
+              ? 'Must be a 0-based index into the section\'s choices'
+              : `Must be a 0-based index into this section's ${choiceCount} choices`,
+          });
+        }
+      }
+    }
+  }
+
+  // Missing hotspots / brand_choice are NOT errors here — the API accepts a
+  // metric without them and you can fill them in with edit-question before
+  // sending. uxMetricWarnings() surfaces them; `tests validate` is the gate.
 }
 
 function validateStringItems(items: unknown[], field: string, questionNum: number, errors: ValidationError[]): void {
@@ -1073,42 +1522,71 @@ export function validateQuestions(
         if (!Array.isArray(q.hotspots)) {
           errors.push({ question: num, field: 'hotspots', message: 'Must be an array of hotspot objects' });
         } else {
-          for (let h = 0; h < q.hotspots.length; h++) {
-            const hotspot = q.hotspots[h] as Record<string, unknown>;
-            if (!hotspot || typeof hotspot !== 'object' || Array.isArray(hotspot)) {
-              errors.push({ question: num, field: `hotspots[${h}]`, message: 'Must be an object' });
-              continue;
-            }
-            for (const key of ['x', 'y', 'width', 'height']) {
-              const value = hotspot[key];
-              if (typeof value !== 'number') {
-                errors.push({
-                  question: num,
-                  field: `hotspots[${h}].${key}`,
-                  message: 'Required: number relative to the image (0-1)',
-                });
-              } else if (key === 'x' || key === 'y' ? value < 0 || value > 1 : value <= 0 || value > 1) {
-                errors.push({
-                  question: num,
-                  field: `hotspots[${h}].${key}`,
-                  message: key === 'x' || key === 'y' ? 'Must be between 0 and 1' : 'Must be greater than 0 and at most 1',
-                });
-              }
-            }
-            if (hotspot.priority !== undefined && !HOTSPOT_PRIORITIES.includes(hotspot.priority as string)) {
-              errors.push({
-                question: num,
-                field: `hotspots[${h}].priority`,
-                message: `Must be one of: ${HOTSPOT_PRIORITIES.join(', ')}`,
-              });
-            }
-          }
+          validateHotspots(q.hotspots, num, 'hotspots', errors);
         }
       }
     }
   }
 
   return errors;
+}
+
+/**
+ * Hotspot geometry, shared by click_test questions and by the click sections a
+ * UX metric template generates, so both reject the same malformed rectangles.
+ * Coordinates are relative to the image (0-1) and x/y are the top-left corner.
+ */
+function validateHotspots(
+  hotspots: unknown[],
+  questionNum: number,
+  field: string,
+  errors: ValidationError[],
+): void {
+  for (let h = 0; h < hotspots.length; h++) {
+    const hotspot = hotspots[h] as Record<string, unknown>;
+    if (!hotspot || typeof hotspot !== 'object' || Array.isArray(hotspot)) {
+      errors.push({ question: questionNum, field: `${field}[${h}]`, message: 'Must be an object' });
+      continue;
+    }
+
+    for (const key of ['x', 'y', 'width', 'height']) {
+      const value = hotspot[key];
+      if (typeof value !== 'number') {
+        errors.push({
+          question: questionNum,
+          field: `${field}[${h}].${key}`,
+          message: 'Required: number relative to the image (0-1)',
+        });
+      } else if (key === 'x' || key === 'y' ? value < 0 || value > 1 : value <= 0 || value > 1) {
+        errors.push({
+          question: questionNum,
+          field: `${field}[${h}].${key}`,
+          message: key === 'x' || key === 'y' ? 'Must be between 0 and 1' : 'Must be greater than 0 and at most 1',
+        });
+      }
+    }
+
+    // The editor confines dragging and resizing to the image, so a rectangle
+    // hanging off the edge is a caller error rather than something to clamp.
+    const { x, y, width, height } = hotspot as Record<string, number>;
+    if ([x, y, width, height].every(v => typeof v === 'number')) {
+      if (x + width > 1 || y + height > 1) {
+        errors.push({
+          question: questionNum,
+          field: `${field}[${h}]`,
+          message: 'Extends past the image — x + width and y + height must each be at most 1',
+        });
+      }
+    }
+
+    if (hotspot.priority !== undefined && !HOTSPOT_PRIORITIES.includes(hotspot.priority as string)) {
+      errors.push({
+        question: questionNum,
+        field: `${field}[${h}].priority`,
+        message: `Must be one of: ${HOTSPOT_PRIORITIES.join(', ')}`,
+      });
+    }
+  }
 }
 
 interface BranchingContext {
@@ -1318,6 +1796,10 @@ export type WalkthroughScreen =
       ux_metric?: string;
       site_link?: string;
       assets: WalkthroughAsset[];
+      /** Read-back of what `branching` writes; omitted when the section has none. */
+      branching?: BranchingData[];
+      /** Click sections only. Empty = engagement heatmap, nothing hotspot-scored. */
+      hotspots?: HotspotData[];
       renderable: 'full' | 'placeholder';
     };
 
@@ -1406,6 +1888,8 @@ export function buildWalkthroughScreens(test: TestShowResponse): WalkthroughScre
       ux_metric: uxMetric,
       site_link: variation?.site_link || undefined,
       assets,
+      branching: Array.isArray(s.branching) && s.branching.length ? s.branching : undefined,
+      hotspots: Array.isArray(s.hotspots) ? s.hotspots : undefined,
       renderable: ASSET_HEAVY_RAW_TYPES.has(s.type) ? 'placeholder' : 'full',
     });
   }
@@ -1414,6 +1898,48 @@ export function buildWalkthroughScreens(test: TestShowResponse): WalkthroughScre
 }
 
 const LETTERS = 'abcdefghijklmnopqrstuvwxyz';
+
+/**
+ * Participants never see hotspot boxes, but a reviewer walking the test needs
+ * to know whether the click targets exist — a hotspot-scored metric with none
+ * scores zero, and the participant view gives no hint of that.
+ */
+function hotspotLines(screen: WalkthroughScreen): string[] {
+  if (screen.kind !== 'question' || !Array.isArray(screen.hotspots)) return [];
+
+  if (screen.hotspots.length === 0) {
+    const scored = screen.ux_metric && UX_METRIC_TYPES[screen.ux_metric]?.hotspot_scored;
+    return [
+      scored
+        ? `  \x1b[33m⚠ no hotspots — ${screen.ux_metric} scores clicks inside hotspots, so this scores zero\x1b[0m`
+        : `  \x1b[90mⓘ no hotspots (engagement heatmap)\x1b[0m`,
+    ];
+  }
+
+  return [
+    `  \x1b[90mⓘ ${screen.hotspots.length} hotspot${screen.hotspots.length === 1 ? '' : 's'}: ${screen.hotspots
+      .map(h => h.name || `#${h.number}`)
+      .join(', ')}\x1b[0m`,
+  ];
+}
+
+function branchingLines(screen: WalkthroughScreen): string[] {
+  if (screen.kind !== 'question' || !screen.branching?.length) return [];
+
+  return [
+    '  \x1b[90mⓘ branching:\x1b[0m',
+    ...screen.branching.map(b => {
+      const from = b.label ? `"${b.label}"` : `${b.source} ${b.index}`;
+      const to =
+        b.action === 'end_test'
+          ? 'end test'
+          : b.question != null
+            ? `Q${b.question}`
+            : `section ${b.section_id ?? '?'}`;
+      return `  \x1b[90m    ${from} → ${to}\x1b[0m`;
+    }),
+  ];
+}
 
 function stimulusLines(screen: WalkthroughScreen): string[] {
   if (screen.kind !== 'question') return [];
@@ -1462,6 +1988,8 @@ function renderWalkthroughScreen(screen: WalkthroughScreen): string[] {
     if (screen.choices.length) {
       for (const c of screen.choices) lines.push(`    · ${c}`);
     }
+    lines.push(...hotspotLines(screen));
+    lines.push(...branchingLines(screen));
     lines.push('');
     lines.push('  [ Next ]');
     return lines;
@@ -1544,6 +2072,7 @@ function renderWalkthroughScreen(screen: WalkthroughScreen): string[] {
     }
   }
 
+  lines.push(...branchingLines(screen));
   lines.push('');
   lines.push('  [ Next ]');
   return lines;
@@ -1878,6 +2407,8 @@ export function walkthroughScreenJson(screen: WalkthroughScreen): Record<string,
     ux_metric: screen.ux_metric ?? null,
     site_link: screen.site_link ?? null,
     assets: screen.assets,
+    branching: screen.branching ?? null,
+    hotspots: screen.hotspots ?? null,
     renderable: screen.renderable,
   };
 }
@@ -2032,6 +2563,15 @@ export function registerTestsCommand(program: Command): void {
             console.log(`  Sections:     ${info.section_count}`);
             console.log(`  Types:        ${info.section_types}`);
             console.log(`  Instructions: ${info.default_instructions}`);
+            if (info.click_sections?.length) {
+              console.log(`  Click sections: sections[${info.click_sections.join('], sections[')}] — each needs an image asset_id`);
+            }
+            if (info.hotspot_scored) {
+              console.log('  \x1b[33mScores clicks inside hotspots\x1b[0m — supply hotspots per click section or it scores zero.');
+            }
+            if (info.brand_choice_section !== undefined) {
+              console.log(`  \x1b[33mNeeds brand_choice\x1b[0m — mark which choice is your brand on sections[${info.brand_choice_section}], or it scores zero.`);
+            }
             console.log(`\n  Usage:`);
             console.log(`    helio-cli tests create --ux-metrics ${cmdOpts.type} ...`);
             console.log(`    (or --ux-metrics-json for per-metric context and per-section overrides)`);
@@ -2040,17 +2580,28 @@ export function registerTestsCommand(program: Command): void {
         }
 
         if (isJsonMode()) {
-          printJson(UX_METRIC_TYPES);
+          printJson({ metrics: UX_METRIC_TYPES, excluded: EXCLUDED_UX_METRIC_TYPES });
         } else {
           console.log('\x1b[1m── UX Metrics (auto-generated via --ux-metrics) ──\x1b[0m\n');
           for (const [name, info] of Object.entries(UX_METRIC_TYPES)) {
+            const needs: string[] = [];
+            if (info.click_sections?.length) needs.push('image + hotspots');
+            if (info.brand_choice_section !== undefined) needs.push('brand_choice');
             console.log(`  \x1b[1m${name}\x1b[0m — ${info.description}`);
-            console.log(`    ${info.section_count} section(s): ${info.section_types}`);
+            console.log(
+              `    ${info.section_count} section(s): ${info.section_types}` +
+              (needs.length ? `  \x1b[33m[needs ${needs.join(' + ')}]\x1b[0m` : ''),
+            );
             console.log();
           }
           console.log('Usage: helio-cli tests create --ux-metrics sentiment loyalty ...');
           console.log('(or --ux-metrics-json \'[{"type":"sentiment","context":"...","sections":[...]}]\' for object form)');
-          console.log(`\nExcluded types (require click tests or prototypes): ${EXCLUDED_UX_METRIC_TYPES.join(', ')}`);
+          console.log('\nMetrics marked [needs …] score zero without those overrides — pass them via --ux-metrics-json.');
+          console.log('The same type may appear more than once; each instance is scored separately.');
+          console.log('\nStill not creatable via the API:');
+          for (const [name, reason] of Object.entries(EXCLUDED_UX_METRIC_TYPES)) {
+            console.log(`  ${name} — ${reason}`);
+          }
         }
       }),
     );
@@ -2085,16 +2636,28 @@ export function registerTestsCommand(program: Command): void {
         const data = (await client.get(`tests/${id}`)) as { test: TestShowResponse };
         const blocks = buildOrderBlocks(data.test.sections ?? []);
 
+        const ambiguous = blocks.filter(b => b.ambiguous);
+        const ambiguousTypes = [...new Set(ambiguous.map(b => b.metric_type))];
+
         if (isJsonMode()) {
           printJson({
             test_id: data.test.id,
             order: blocks.map(b => b.key),
+            reorderable: ambiguous.length === 0,
+            ...(ambiguous.length
+              ? {
+                  ambiguous_metric_types: ambiguousTypes,
+                  ambiguous_note:
+                    'These metric types appear more than once. reorder needs metric:<uuid> to tell the instances apart, and GET /tests/:id does not return metric uuids — take them from the ux_metrics summary in the response to the create/update that added them.',
+                }
+              : {}),
             blocks: blocks.map((b, i) => ({
               key: b.key,
               label: b.label,
               block_index: i + 1,
               question_number: b.question_number,
               question_count: b.question_count,
+              ...(b.ambiguous ? { ambiguous: true } : {}),
             })),
           });
         } else {
@@ -2110,11 +2673,23 @@ export function registerTestsCommand(program: Command): void {
                 : i + 1 !== b.question_number
                   ? `  \x1b[90m(Q${b.question_number})\x1b[0m`
                   : '';
-            console.log(`  ${i + 1}. ${b.key}${qNote}`);
+            const flag = b.ambiguous ? `  \x1b[33m⚠ needs metric:<uuid>\x1b[0m` : '';
+            console.log(`  ${i + 1}. ${b.key}${qNote}${flag}`);
             console.log(`     ${b.label}`);
           }
-          console.log(`\nTo reorder, pass --order with the block keys in your desired order:`);
-          console.log(`  helio-cli tests reorder ${id} --order ${blocks.map(b => `"${b.key}"`).join(' ')}`);
+
+          if (ambiguous.length) {
+            console.log(
+              `\n  \x1b[33m⚠\x1b[0m ${ambiguousTypes.join(', ')} appear${ambiguousTypes.length === 1 ? 's' : ''} more than once on this test.`,
+            );
+            console.log(`    Reorder identifies repeated types by "metric:<uuid>", and \x1b[1mtests get\x1b[0m does not`);
+            console.log(`    return metric uuids — take them from the \x1b[1mux_metrics\x1b[0m summary in the response to`);
+            console.log(`    the create/add-ux-metrics call that added them. The keys above are shown for reading,`);
+            console.log(`    not for pasting.`);
+          } else {
+            console.log(`\nTo reorder, pass --order with the block keys in your desired order:`);
+            console.log(`  helio-cli tests reorder ${id} --order ${blocks.map(b => `"${b.key}"`).join(' ')}`);
+          }
         }
       }),
     );
@@ -2145,6 +2720,9 @@ export function registerTestsCommand(program: Command): void {
               introduction: test.introduction ?? null,
             },
             questions: reportData?.questions_summary ?? buildQuestionsFromSections(test.sections),
+            audience: test.audience ?? null,
+            branching: buildBranchingSummary(test.sections),
+            hotspots: buildHotspotSummary(test.sections),
           });
           return;
         }
@@ -2164,9 +2742,14 @@ export function registerTestsCommand(program: Command): void {
         }
         console.log();
 
-        // Questions — prefer report data (has results), fall back to raw sections
+        printAudience(test.audience);
+
+        // Questions — prefer report data (has results), fall back to raw sections.
+        // Report data carries results but not branching/hotspots, so a launched
+        // test still gets those from the sections below.
         if (reportData?.questions_summary?.length) {
           printReportQuestions(reportData.questions_summary);
+          printStructureNotes(test.sections);
         } else if (test.sections?.length) {
           printSectionQuestions(test.sections);
         } else {
@@ -2224,10 +2807,10 @@ export function registerTestsCommand(program: Command): void {
     .option('--audiences <ids...>', 'Audience segment IDs')
     .requiredOption('--target-audience-size <n>', 'Target number of responses')
     .option('--questions <json>', 'Questions as JSON array or @path/to/file.json')
-    .option('--ux-metrics <types...>', 'UX metrics to add (auto-generates measurement questions; see --ux-metrics-json for per-metric context/section overrides)')
+    .option('--ux-metrics <types...>', 'UX metrics to add (auto-generates measurement questions; a type may be repeated, and each instance is scored separately). Click-backed and brand_score metrics need per-section overrides — see --ux-metrics-json.')
     .option(
       '--ux-metrics-json <json>',
-      'UX metrics as a JSON array or @path/to/file.json (object form: per-metric context, per-section instructions/assets/followups)',
+      'UX metrics as a JSON array or @path/to/file.json (object form: per-metric context, per-section instructions/assets/followups/hotspots/choices/brand_choice)',
     )
     .option('--ux-metric-context <text>', 'Replace generic nouns in UX metric instructions (e.g. "the Helio dashboard")')
     .option('--dry-run', 'Validate locally without creating the test')
@@ -2333,6 +2916,9 @@ export function registerTestsCommand(program: Command): void {
               'Branching requires a Helio Enterprise account. Validation cannot see your plan, so this may still fail with a 400 on create.',
             );
           }
+          // Metrics that create fine and measure nothing. `tests validate`
+          // refuses to pass these, so surfacing them here saves a round trip.
+          warnings.push(...uxMetricWarnings(uxMetrics ?? []));
           if (warnings.length > 0) {
             summary.warnings = warnings;
           }
@@ -2401,10 +2987,14 @@ export function registerTestsCommand(program: Command): void {
         if (cmdOpts.audiences) body.audiences = cmdOpts.audiences;
 
         const data = await client.post('tests', body);
+        const metricWarnings = uxMetricWarnings(uxMetrics ?? []);
         if (isJsonMode()) {
-          printJson(data);
+          printJson(metricWarnings.length ? { ...(data as object), warnings: metricWarnings } : data);
         } else {
           printKeyValue(data as Record<string, unknown>);
+          for (const w of metricWarnings) {
+            console.log(`\n  \x1b[33m⚠\x1b[0m ${w}`);
+          }
         }
       }),
     );
@@ -2497,7 +3087,7 @@ export function registerTestsCommand(program: Command): void {
 
   cmd
     .command('edit-question <test-id> <section-id>')
-    .description('Replace a question on a draft test (or edit instructions/assets/choices/randomize/follow-ups on a UX metric section)')
+    .description('Replace a question on a draft test (or edit instructions/assets/choices/hotspots/brand-choice/randomize/follow-ups on a UX metric section)')
     .option('--type <type>', 'Question type (required for regular questions, omit for UX metric sections)')
     .option('--instructions <text>', 'Question text')
     .option('--choices <items...>', 'Choices')
@@ -2513,7 +3103,8 @@ export function registerTestsCommand(program: Command): void {
     .option('--can-skip-cards', 'Allow skipping cards')
     .option('--asset-id <id>', 'Asset ID (stimulus image)')
     .option('--site-link <url>', 'Site link URL (stimulus)')
-    .option('--hotspots <json>', 'Hotspots as JSON array or @path/to/file.json (for click_test): [{name?, x, y, width, height, priority?}]')
+    .option('--hotspots <json>', 'Hotspots as JSON array or @path/to/file.json, for a click_test question or a click section of a UX metric: [{name?, x, y, width, height, priority?}]. Replaces the existing set.')
+    .option('--brand-choice <index>', '0-based index of the choice that is your brand (brand_score market recognition section only)')
     .option('--branching <json>', 'Branching as JSON array or @file (single-select multiple_choice; requires a Helio Enterprise account): [{choice, action: skip_to_question|end_test, question?|section_id?, message?, redirect_url?}]. Skips are forward-only.')
     .option('--followup <text>', 'Follow-up question text')
     .option('--followup-required', 'Mark the follow-up as required')
@@ -2544,6 +3135,13 @@ export function registerTestsCommand(program: Command): void {
         if (cmdOpts.assetId) question.asset_id = cmdOpts.assetId;
         if (cmdOpts.siteLink) question.site_link = cmdOpts.siteLink;
         if (cmdOpts.hotspots) question.hotspots = parseJsonOrFile(cmdOpts.hotspots) as unknown[];
+        if (cmdOpts.brandChoice !== undefined) {
+          const parsed = Number(cmdOpts.brandChoice);
+          if (!Number.isInteger(parsed) || parsed < 0) {
+            throw new Error('--brand-choice must be a 0-based choice index (a non-negative integer).');
+          }
+          question.brand_choice = parsed;
+        }
         if (cmdOpts.branching) question.branching = parseJsonOrFile(cmdOpts.branching) as unknown[];
         if (cmdOpts.removeFollowup) {
           question.followup = { remove: true };
@@ -2578,7 +3176,6 @@ export function registerTestsCommand(program: Command): void {
             ['points_label', '--points-label'],
             ['random_category_order', '--random-category-order'],
             ['can_skip_cards', '--can-skip-cards'],
-            ['hotspots', '--hotspots'],
             ['branching', '--branching'],
           ];
           const present = structuralFlags
@@ -2587,17 +3184,35 @@ export function registerTestsCommand(program: Command): void {
           if (present.length > 0) {
             throw new Error(`Structural flags not allowed without --type (UX metric sections only support safe edits): ${present.join(', ')}`);
           }
+          // hotspots and brand_choice are safe on a metric section: both target
+          // what the metric scores against, not the section's structure. The
+          // API rejects hotspots on a non-click section and brand_choice
+          // anywhere but brand_score's market recognition section.
+          if (question.hotspots !== undefined) {
+            const hotspotErrors: ValidationError[] = [];
+            validateHotspots(question.hotspots as unknown[], 0, 'hotspots', hotspotErrors);
+            if (hotspotErrors.length > 0) {
+              if (isJsonMode()) {
+                printJson({ valid: false, errors: hotspotErrors });
+              } else {
+                console.log(formatValidationErrors(hotspotErrors));
+              }
+              return;
+            }
+          }
           // At least one safe field must be provided
           if (
             !question.instructions &&
             !question.asset_id &&
             !question.site_link &&
             !question.choices &&
+            question.hotspots === undefined &&
+            question.brand_choice === undefined &&
             question.randomize_choices === undefined &&
             !question.followup
           ) {
             throw new Error(
-              'Provide at least one of --instructions, --asset-id, --site-link, --choices, --randomize-choices, --followup, or --remove-followup.',
+              'Provide at least one of --instructions, --asset-id, --site-link, --choices, --hotspots, --brand-choice, --randomize-choices, --followup, or --remove-followup.',
             );
           }
         }
@@ -2636,7 +3251,7 @@ export function registerTestsCommand(program: Command): void {
     .option('--metrics <types...>', 'UX metric types to add')
     .option(
       '--metrics-json <json>',
-      'UX metrics as a JSON array or @path/to/file.json (object form: per-metric context, per-section instructions/assets/followups)',
+      'UX metrics as a JSON array or @path/to/file.json (object form: per-metric context, per-section instructions/assets/followups/hotspots/choices/brand_choice)',
     )
     .option('--ux-metrics <types...>', 'Alias for --metrics (matches tests create)')
     .option('--ux-metrics-json <json>', 'Alias for --metrics-json (matches tests create)')
@@ -2680,10 +3295,14 @@ export function registerTestsCommand(program: Command): void {
 
         const client = makeClient(program);
         const data = await client.patch(`tests/${id}`, body);
+        const metricWarnings = uxMetricWarnings(metrics);
         if (isJsonMode()) {
-          printJson(data);
+          printJson(metricWarnings.length ? { ...(data as object), warnings: metricWarnings } : data);
         } else {
           console.log(`\x1b[32m✓\x1b[0m Added UX metrics to test ${id}: ${metricLabel}`);
+          for (const w of metricWarnings) {
+            console.log(`  \x1b[33m⚠\x1b[0m ${w}`);
+          }
           printKeyValue(data as Record<string, unknown>);
         }
       }),
@@ -2691,9 +3310,9 @@ export function registerTestsCommand(program: Command): void {
 
   cmd
     .command('remove-ux-metrics <id>')
-    .description('Remove UX metrics from an existing draft test')
-    .option('--metrics <types...>', 'UX metric types to remove')
-    .option('--ux-metrics <types...>', 'Alias for --metrics (matches tests create)')
+    .description('Remove UX metrics from an existing draft test (by type, or by metric id to target one instance)')
+    .option('--metrics <ids...>', 'UX metric types or metric ids to remove. A type removes every instance of it; a metric id (from the ux_metrics summary) removes just that one.')
+    .option('--ux-metrics <ids...>', 'Alias for --metrics (matches tests create)')
     .action(
       withErrorHandling(async (id: string, cmdOpts) => {
         const metrics: string[] | undefined = cmdOpts.metrics ?? cmdOpts.uxMetrics;
@@ -2747,7 +3366,7 @@ export function registerTestsCommand(program: Command): void {
   cmd
     .command('reorder <id>')
     .description('Reorder questions and UX metric groups on a draft test')
-    .requiredOption('--order <blocks...>', 'Ordered block references: "section:<uuid-or-id>" or "metric:<type>"')
+    .requiredOption('--order <blocks...>', 'Ordered block references: "section:<uuid-or-id>", or "metric:<type>" / "metric:<uuid>". A type that is on the test more than once must be given as metric:<uuid> (from the ux_metrics summary) — metric:<type> is ambiguous and rejected.')
     .action(
       withErrorHandling(async (id: string, cmdOpts) => {
         const order: string[] = cmdOpts.order;

@@ -254,9 +254,9 @@ describe('walkthroughScreenJson', () => {
 
   it('question screens expose the agent-facing field set', () => {
     expect(Object.keys(json[2]).sort()).toEqual([
-      'allow_multiple', 'assets', 'choices', 'kind', 'position', 'q_number',
-      'question', 'randomize_choices', 'raw_type', 'renderable',
-      'scale_type', 'site_link', 'type', 'type_label', 'ux_metric',
+      'allow_multiple', 'assets', 'branching', 'choices', 'hotspots', 'kind',
+      'position', 'q_number', 'question', 'randomize_choices', 'raw_type',
+      'renderable', 'scale_type', 'site_link', 'type', 'type_label', 'ux_metric',
     ]);
   });
 });

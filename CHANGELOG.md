@@ -2,7 +2,61 @@
 
 ## Unreleased
 
+### Added
+- **Five UX metric types are now creatable**, matching the 2026-07-30 Public API
+  release ([helio#5006](https://github.com/zurb/helio/pull/5006)). `engagement`,
+  `success`, `usability` and `satisfaction` build click sections and became
+  creatable once `click_test` did; `brand_score` never needed click tests at
+  all. Only `completion` and `effort` remain excluded, and the CLI now names the
+  actual reason per type (a Figma prototype section the API can't create)
+  instead of a blanket "requires click tests or prototypes".
+- **Per-section overrides `hotspots`, `choices` and `brand_choice`** on the UX
+  metric object form (`--ux-metrics-json` / `--metrics-json`), and
+  `--hotspots` / `--brand-choice` on `edit-question` for metric sections.
+  `hotspots` takes the same shape and validation as a `click_test` question;
+  `brand_choice` is a 0-based index marking which choice is your brand.
+- **`create` and `add-ux-metrics` warn when a metric will score zero** — a
+  click-backed metric whose click sections have no hotspots, or a `brand_score`
+  with no brand marked. Warnings rather than errors: the API accepts both, and
+  you can fill the gap in with `edit-question` before sending. `tests validate`
+  is the gate that refuses.
+- **Read-back of audience, branching and hotspots.** `preview` shows the
+  audience configuration, per-question branching in the vocabulary writes take,
+  and click-test hotspots; `--output json` adds `audience`, `branching` and
+  `hotspots` blocks, and `walkthrough` screens carry `branching` and `hotspots`.
+  A click section with no hotspots is called out, since on a hotspot-scored
+  metric that means it scores zero.
+- Hotspot geometry now rejects a rectangle that hangs off the image
+  (`x + width` or `y + height` above 1), matching the API. Applies to
+  `click_test` questions and to metric section overrides, which share one
+  validator.
+
 ### Changed
+- **A UX metric type may now appear on a test more than once.** The duplicate
+  check is gone: every instance owns its own sections and is scored
+  independently, which is what a multi-screen flow measuring `expectations` on
+  each screen needs. Consequences:
+  - `tests order` emits one block per metric **instance** rather than
+    collapsing a type into one block, so a repeated type no longer reports the
+    wrong question count.
+  - `reorder` identifies a repeated type by `metric:<uuid>`. `tests order`
+    flags those blocks and withholds the paste-ready command, because
+    `GET /tests/:id` does not expose metric uuids — see *Known gap* below.
+  - `remove-ux-metrics --metrics` accepts a metric id as well as a type: a type
+    removes every instance, an id removes the one it names.
+
+### Known gap
+- **`tests order` cannot produce a working `reorder` command for a repeated
+  metric type.** `reorder` needs `metric:<uuid>` to tell instances apart, but
+  `GET /tests/:id` returns only the metric's numeric `id` (via the section's
+  `ux_metric` block) and no `ux_metrics` summary — the uuids appear solely in
+  the response to the `create`/`add-ux-metrics` call that created them. A client
+  that builds a test in one process and reorders it in another has no way to
+  discover them. `order` says so rather than printing a command that 400s.
+  Raised on [helio#5006](https://github.com/zurb/helio/pull/5006); the fix is
+  API-side (expose the uuid on read, or accept `metric:<numeric id>`).
+
+### Documentation
 - `guide` and the README now teach metrics-first. Previously both opened with a
   hand-written `{"type": "NPS", "instructions": "How likely are you to recommend
   us?"}` — which *is* the `loyalty` metric, built by hand and therefore scoring
@@ -21,24 +75,26 @@
   - The UX-metrics block moved above the `add-question` examples, which are now
     framed as "for what the metrics don't cover". The `likert` example no
     longer restates usefulness/satisfaction.
-  - The bare list of metric names is now an eleven-line list of what each metric
-    already asks, at the point where you pick them. A short "metric territory"
-    list would have read as exhaustive and sent anyone whose question wasn't on
-    it straight back to hand-writing. "Genuinely custom" is defined positively
+  - The bare list of metric names is now a list of what each metric already
+    asks, at the point where you pick them — all sixteen, including the five
+    that became creatable in this same release. A short "metric territory" list
+    would have read as exhaustive and sent anyone whose question wasn't on it
+    straight back to hand-writing. "Genuinely custom" is defined positively
     instead: your own domain, or a type no metric emits (`ranking`, `matrix`,
     `card_sort`, `point_allocation`, `max_diff`).
   - Added empirical starting stacks (first look → `comprehension desirability
-    intent`; findability → `success sentiment effort`; flow iteration →
-    `expectations success sentiment`), flagging which members are web-app only.
-  - Corrected why the seven excluded metrics are excluded. They are rejected by
-    the Public API, not only client-side. `engagement`/`success`/`usability`
-    build click-test sections, `completion`/`effort` build Figma-prototype
-    directives, `satisfaction` is click test + Likert — but `brand_score` is
-    none of those; it is a fixed brand composite whose scoring depends on
-    choice flags the create path cannot set.
+    intent engagement`; findability → `success sentiment`; flow iteration →
+    `expectations success sentiment`), marking which members need an image and
+    hotspots and which are still web-app only.
+  - Corrected why the excluded metrics are excluded: they are rejected by the
+    Public API, not only client-side, and the reason is per type. With this
+    release only `completion` and `effort` remain, both built from a Figma
+    prototype section the API cannot create.
   - JSON guide gains `metrics_first`, `ux_metrics.why_metrics_first`,
     `ux_metrics.covers`, `ux_metrics.custom_question_territory`,
-    `ux_metrics.starting_stacks`, and `commands.tests.create.recommended_shape`.
+    `ux_metrics.repeated_types`, `ux_metrics.section_overrides`,
+    `ux_metrics.scores_zero_without_overrides`, `ux_metrics.starting_stacks`,
+    and `commands.tests.create.recommended_shape`.
 
 ## 0.6.0
 

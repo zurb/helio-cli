@@ -113,17 +113,23 @@ No hand-written NPS in that example on purpose: `--ux-metrics loyalty` builds it
 
 **Starting stacks** — from the Helio test corpus, if you don't know which metrics to pick:
 
-| Situation | Metrics | Also |
+| Situation | Metrics | Note |
 | --- | --- | --- |
-| First look, one screen | `comprehension desirability intent` | a click test for engagement |
-| Findability, any stage | `success sentiment effort` | click tests |
-| Iteration on a flow | `expectations success sentiment` | |
+| First look, one screen | `comprehension desirability intent engagement` | `engagement` needs an image + hotspots |
+| Findability, any stage | `success sentiment` | `success` needs an image + hotspots; the corpus pairs this with `effort`, still web-app only |
+| Iteration on a flow | `expectations success sentiment` | `success` needs an image + hotspots |
 
-`success`, `effort`, `engagement`, `completion`, `usability`, `satisfaction` and `brand_score` can't be created from the CLI — the Public API rejects them too. Build those in the Helio web app. See [UX Metrics](#ux-metrics) for the CLI-creatable list and why each of the seven is excluded.
+Only `completion` and `effort` are still web-app only — both are built from a Figma prototype section the API can't create. Everything else, including the click-backed metrics and `brand_score`, is CLI-creatable as of the 2026-07-30 API release. See [UX Metrics](#ux-metrics).
+
+**The same metric type may appear more than once.** Each instance owns its own sections and is scored separately — what a multi-screen flow measuring `expectations` on every screen needs:
+
+```bash
+helio-cli tests create ... --ux-metrics expectations sentiment expectations
+```
 
 #### Custom questions — for what the metrics don't cover
 
-That gap is narrower than it looks. Read the whole [coverage list](#ux-metrics) before deciding a question is custom — the overlap is usually with a metric you skipped, not the one you checked. The seven web-app-only metrics mostly cover task outcomes; those aren't custom-question territory either, so build them in the web app rather than approximating them here.
+That gap is narrower than it looks, and it narrowed further on 2026-07-30 when five more metrics became creatable. Read the whole [coverage list](#ux-metrics) before deciding a question is custom — the overlap is usually with a metric you skipped, not the one you checked. `completion` and `effort` are the only web-app-only metrics left; don't approximate those with a hand-written question either.
 
 Genuinely custom means your own domain — pricing, features, workflow specifics, "how did you pay", "which plan fits you" — or a question type no metric emits: `ranking`, `matrix`, `card_sort`, `point_allocation`, `max_diff`.
 
@@ -153,7 +159,7 @@ helio-cli tests participants <test-uuid> --group-by cohort    # cluster by cohor
 helio-cli tests participants <test-uuid> --sentiment negative --output json
 ```
 
-`preview` is a structural summary (every question on one page). `walkthrough` renders each participant screen separately — intro, then each question with its own input UI (radio buttons, text box, NPS row, etc.) — so you can comprehend the experience step by step. Asset-heavy types (prototypes, click tests, tree tests) render a placeholder pointing to the Helio browser preview.
+`preview` is a structural summary (every question on one page), and since the 2026-07-30 API release it also shows the test's **audience** configuration, per-question **branching**, and click-test **hotspots** — everything a scripted build writes is now readable back, so a pre-launch review can verify its own work. `--output json` emits those as `audience`, `branching` and `hotspots` blocks; `walkthrough` carries `branching` and `hotspots` on each screen. A click section with no hotspots is called out, since on a hotspot-scored metric that means it scores zero. `walkthrough` renders each participant screen separately — intro, then each question with its own input UI (radio buttons, text box, NPS row, etc.) — so you can comprehend the experience step by step. Asset-heavy types (prototypes, click tests, tree tests) render a placeholder pointing to the Helio browser preview.
 
 `participants` is the report seen one respondent at a time: where `walkthrough` shows the empty test structure and `tests report` shows aggregates, `participants` stitches each person's answers together in order — the rating, the follow-up "why", and that answer's sentiment, plus demographics, audience type, and cohorts. It accepts the same demographic/segment/sentiment filters as `report`, supports `--group-by cohort|audience_type`, and emits flat `{ study, participants: [...] }` JSON for piping into `jq`. It's a convenience wrapper over `tests report --include participants`. Note: `cohorts` is empty for non-enroll recruits, and `sentiment` / prototype grade are eventually consistent — a `null` means "not computed yet" (shown as *pending*), never neutral.
 
@@ -221,7 +227,10 @@ helio-cli tests create ... \
 # Add/remove metrics on existing drafts
 helio-cli tests add-ux-metrics <test-uuid> --metrics comprehension loyalty
 helio-cli tests add-ux-metrics <test-uuid> --position 2 --metrics-json '[{"type":"sentiment","context":"the checkout flow"}]'
+
+# A TYPE removes every instance of it; a metric id removes just that one
 helio-cli tests remove-ux-metrics <test-uuid> --metrics comprehension
+helio-cli tests remove-ux-metrics <test-uuid> --metrics <metric-uuid>
 
 # View available metric types
 helio-cli tests ux-metric-types
@@ -242,10 +251,42 @@ helio-cli tests ux-metric-types
 | `desirability` | impression words + how likely to purchase |
 | `usefulness` | is it useful + does it make things easier to get done |
 | `expectations` | what they expected + how well it was met |
+| `engagement` | where they would go first — **click test: image + hotspots** |
+| `success` | can they find the one thing — **click test: image + hotspots** |
+| `usability` | three find-it tasks in a row — **3 click tests: image + hotspots each** |
+| `satisfaction` | a find-it task plus how completing it felt — **click test: image + hotspots** |
+| `brand_score` | do they know you, what impressions you give, would they recommend you — **needs `brand_choice`** |
 
 `helio-cli tests ux-metric-types --type <name>` prints the exact wording a metric generates.
 
-**Not creatable from the CLI** — and rejected by the Public API too, not just client-side: `engagement`, `success` and `usability` build click-test sections; `completion` and `effort` build Figma-prototype directives; `satisfaction` is a click test plus a Likert; `brand_score` is a fixed brand composite whose scoring depends on choice flags the create path can't set. Build all seven in the Helio web app.
+#### Metrics that score zero without overrides
+
+The five bolded types launch fine and measure nothing unless you supply the missing piece. A click-backed metric scores clicks that land **inside a hotspot**, and `brand_score` reads its recognition score off the choice you flag as your brand.
+
+```bash
+helio-cli tests create ... --ux-metrics-json '[
+  {"type":"success","sections":[
+    {"asset_id":"<image asset>",
+     "instructions":"Click where you would check out.",
+     "hotspots":[{"name":"Checkout","x":0.4,"y":0.5,"width":0.2,"height":0.1}]}]},
+  {"type":"brand_score","sections":[
+    {"choices":["Helio","UserTesting","Maze","Other"],"brand_choice":0}]}
+]'
+
+# Or fill them in on an existing draft
+helio-cli tests edit-question <test-uuid> <section-uuid> \
+    --hotspots '[{"name":"Checkout","x":0.4,"y":0.5,"width":0.2,"height":0.1}]'
+helio-cli tests edit-question <test-uuid> <section-uuid> --brand-choice 0
+
+# Catch what still scores zero before you spend answers on it
+helio-cli tests validate <test-uuid>
+```
+
+Hotspot coordinates are relative to the image (0–1); `x`/`y` are the top-left corner, and `x + width` / `y + height` must each stay within 1. `create` and `add-ux-metrics` warn when a metric is missing its overrides; `validate` refuses to pass one.
+
+Per-section override keys: `instructions`, `asset_id`, `site_link`, `followup`, `hotspots`, `choices`, `brand_choice`. Overrides apply in template order, so `sections[0]` is the metric's first section. Most metric choice lists are fixed length; `brand_score`'s market recognition list (`sections[0]`) is resizable down to 2.
+
+**Not creatable from the CLI** — and rejected by the Public API too, not just client-side: `completion` and `effort`. Each is built from a Figma prototype section the API cannot create, so build them in the Helio web app. As of the 2026-07-30 API release these are the only two left out; `engagement`, `success`, `usability`, `satisfaction` and `brand_score` used to be excluded and no longer are.
 
 ### Reports
 
@@ -318,6 +359,8 @@ helio-cli tests order <test-uuid>
 helio-cli tests reorder <test-uuid> \
     --order "metric:sentiment" "section:<q1-uuid>" "section:<q2-uuid>"
 ```
+
+`order` lists one block per UX metric **instance**, not per type. A metric type that is on the test more than once must be addressed as `metric:<uuid>` — `metric:<type>` can't say which instance you mean and is rejected. `order` flags those blocks and does not print a paste-ready command for them; the uuids come from the `ux_metrics` summary in the response to the `create` or `add-ux-metrics` call that added them, since `tests get` does not return metric uuids.
 
 ## Command Aliases
 
