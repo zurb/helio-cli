@@ -238,18 +238,51 @@ const GUIDE = `
 
     A metric type that is on the test more than once must be given as
     "metric:<uuid>" — "metric:<type>" can't say which instance you mean and is
-    rejected. \x1b[1mtests order\x1b[0m flags those blocks; the uuids are in the
-    ux_metrics summary returned by the create/add-ux-metrics call that added them.
+    rejected. \x1b[1mtests order\x1b[0m prints the uuid keys directly (GET
+    /tests/:id returns metric uuids since the 2026-08 API release; only on
+    older API deploys are repeated types flagged as unaddressable).
 
   Preview what you've built (flat structural summary, plus the audience,
-  branching and click hotspots the API now reads back):
+  UX metrics, branching and click hotspots the API reads back):
     $ helio-cli tests preview <test-uuid>
-    $ helio-cli tests preview <test-uuid> --output json   # audience/branching/hotspots blocks
+    $ helio-cli tests preview <test-uuid> --output json   # ux_metrics/audience/branching/hotspots blocks
+        # metric-owned questions are tagged with their metric — they are
+        # auto-generated and structurally locked (edit via the metric, not
+        # edit-question)
 
   Walk through the test the way a participant sees it (one screen per page):
     $ helio-cli tests walkthrough <test-uuid>
     $ helio-cli tests walkthrough <test-uuid> --interactive   # advance one at a time (TTY required)
     $ helio-cli tests walkthrough <test-uuid> --output json   # structured screen list
+
+  ──────────────────────────────
+
+  \x1b[1mAudiences — who takes the test.\x1b[0m Five types (default: open):
+    open           share link; you distribute the URL yourself
+    basic          Helio panel, no filters
+    targeted       Helio panel filtered by demographics
+    advanced       saved panel segments (ids from audiences list --source enroll)
+    customer_list  your own lists (ids from audiences list)
+
+  Find audience ids first — they are exactly what --audiences accepts:
+    $ helio-cli audiences list --name "designers" --source enroll   # panel segments
+    $ helio-cli audiences list --recent                             # your lists, most recently used first
+
+  Recruit at create time:
+    $ helio-cli tests create ... --audience-type targeted \\
+        --demographics '{"age":["25-34","35-44"],"country":["United States"]}'
+    $ helio-cli tests create ... --audience-type advanced --audiences <enroll-id>
+
+    Demographics keys: gender, age, income, education, continent, country —
+    values are string arrays. Required for targeted, optional for advanced.
+
+  Or retarget an existing draft (the clone-then-retarget flow):
+    $ helio-cli tests clone <test-uuid>
+    $ helio-cli tests update <new-uuid> --audience-type customer_list --audiences <list-id>
+        # --audience-type replaces the audience wholesale; size carries over
+        # unless --target-audience-size is passed too
+
+  ──────────────────────────────
 
   Check for launch blockers before sending:
     $ helio-cli tests validate <test-uuid>
@@ -259,6 +292,9 @@ const GUIDE = `
 
   Launch the draft:
     $ helio-cli tests send <test-uuid>
+        # panel tests start recruiting, customer-list tests enqueue invites;
+        # a 502 means the panel rejected the quota (audience too narrow) —
+        # nothing is charged, the test stays draft, safe to adjust and retry
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -441,8 +477,15 @@ const GUIDE_JSON = {
         one_of_required: ['--ux-metrics <types...>', '--ux-metrics-json <json>', '--questions <json>'],
         recommended_shape: 'Lead with --ux-metrics (scored, validated sections) and use --questions only for what no metric covers. See ux_metrics.why_metrics_first and ux_metrics.starting_stacks.',
         project: 'Provide either --project-id <uuid> or --project-name <name> (resolved to UUID)',
-        optional: ['--audience-type <type> (default: open)', '--audiences <ids...>', '--ux-metrics <types...>', '--ux-metrics-json <json>', '--ux-metric-context <text>', '--dry-run'],
-        dry_run: 'Validates questions and ux-metrics locally and shows estimated answer spend without creating the test.',
+        optional: ['--audience-type <type> (default: open)', '--audiences <ids...>', '--demographics <json>', '--ux-metrics <types...>', '--ux-metrics-json <json>', '--ux-metric-context <text>', '--dry-run'],
+        audience_types: {
+          open: 'Share-link recruiting; --audiences and --demographics are not accepted',
+          basic: 'Helio panel, no filters',
+          targeted: 'Helio panel filtered by --demographics (required; keys: gender, age, income, education, continent, country; values are string arrays)',
+          advanced: 'Saved panel segments via --audiences (required; ids from `audiences list --source enroll`); --demographics optional',
+          customer_list: 'Your customer lists via --audiences (required; ids from `audiences list`)',
+        },
+        dry_run: 'Validates questions, ux-metrics and the audience config locally and shows estimated answer spend without creating the test.',
         questions_format: 'JSON array or @path/to/file.json',
         ux_metrics_note: 'Auto-generates standardized measurement questions that return a 0-100 score with a threshold label. Can be used with or without --questions; prefer a metric over hand-writing its lookalike.',
         ux_metrics_json_note: 'Object form of --ux-metrics (mutually exclusive with it): \'[{"type":"sentiment","context":"the checkout flow","sections":[{"instructions":"...","asset_id":"...","site_link":"...","followup":{"question":"Why?","required":true,"for_choices":[0,1]}}]}]\'. Per-metric context overrides --ux-metric-context; section overrides apply in template order.',
@@ -541,7 +584,17 @@ const GUIDE_JSON = {
         args: '<test-id> <section-id>',
         note: 'Subsequent questions shift down to fill the gap.',
       },
-      send: { description: 'Launch a draft test', args: '<id>' },
+      send: {
+        description: 'Launch a draft test (panel tests start recruiting, customer-list tests enqueue invites)',
+        args: '<id>',
+        note: 'A 502 means the Enroll platform rejected the quota (e.g. audience too narrow): nothing is charged, the test stays draft, and retrying after adjusting the audience is safe. test_take_url is null for non-open tests by design.',
+      },
+      update: {
+        description: 'Update a draft test, or replace its audience (clone-then-retarget flow)',
+        args: '<id>',
+        optional: ['--name <name>', '--intro <text>', '--target-audience-size <n>', '--audience-type <type>', '--audiences <ids...>', '--demographics <json>'],
+        audience_note: '--audience-type replaces the pending quota wholesale (size carries over unless --target-audience-size is also passed); --audiences/--demographics require it. Same audience type vocabulary as create. Non-draft tests 422.',
+      },
       responses: { description: 'Get all responses', args: '<id>' },
       report: {
         description: 'Get aggregated report data',
@@ -596,8 +649,18 @@ const GUIDE_JSON = {
       'add-participants': { description: 'Bulk-add participants', args: '<id>', required: ['--data <json>'] },
     },
     audiences: {
-      list: { description: 'List audiences' },
+      list: {
+        description: 'List audiences — the ids feed --audiences on tests create/update',
+        options: {
+          '--name <partial>': 'Case-insensitive name filter (both sources)',
+          '--source <source>': "customer_list (default; your lists) or enroll (Helio's panel catalog, for advanced audiences). No combined view — run once per source.",
+          '--recent': 'Most recently used in a test first (customer lists only)',
+          '--page <n>': 'Page number',
+        },
+        note: 'Enroll rows have no usage history in your account, so participants_count/tests_count/last_used_at render as "—".',
+      },
       get: { description: 'Get audience details', args: '<id>' },
+      clone: { description: 'Clone an audience within its customer list', args: '<id>' },
     },
     intercepts: {
       get: { description: 'Get intercept details (authenticated)', args: '<id>' },
