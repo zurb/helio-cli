@@ -406,7 +406,7 @@ const GUIDE = `
     3. Config file (~/.helio-cli/config.json)
 `;
 
-const GUIDE_JSON = {
+export const GUIDE_JSON = {
   overview: 'Helio CLI wraps the Helio Public API. All commands accept --output json for machine-readable output.',
   recommended_workflow: [
     '1. helio-cli auth login                              # authenticate',
@@ -430,6 +430,16 @@ const GUIDE_JSON = {
       set: { description: 'Set config value', args: '<key> <value>', keys: ['api-id', 'api-token', 'base-url'] },
       get: { description: 'Get config value', args: '<key>' },
       show: { description: 'Show all config' },
+    },
+    doctor: {
+      description: 'Diagnose configuration and connectivity issues: config file, credentials, API reachability, Node version, and whether the CLI is up to date',
+    },
+    update: {
+      description: 'Update helio-cli to the latest published version',
+      options: {
+        '--check': 'Only check whether a newer version exists; do not install',
+      },
+      note: 'A daily background check also prints an update notice on stderr when a newer version exists (stdout stays parseable in --output json). Silence it with HELIO_NO_UPDATE_CHECK=1.',
     },
     tests: {
       list: {
