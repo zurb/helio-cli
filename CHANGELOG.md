@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.8.0
+
+Ships against the 2026-08 Public API release (audience recruiting + UX metric
+read-back). Deploy in lockstep with that API change: the API removed the nested
+per-section `ux_metric` object this release replaces, so v0.7.0 binaries lose
+metric awareness against the new API, and v0.8.0's new audience types 400
+against the old one.
+
+### Breaking (with the paired API deploy)
+- **`tests preview --output json` questions and `tests get` sections change
+  metric vocabulary.** Metric-owned sections now carry flat `metric_id` (uuid)
+  + `metric_type` stamps instead of the nested `ux_metric` object (which leaked
+  internal numeric ids and computed live scores on every read). The CLI still
+  reads the nested object when talking to an older API, but scripts that read
+  `.sections[].ux_metric` from raw `tests get` output should move to the
+  stamps — or better, to the new top-level summary below.
+
+### Added
+- **Panel and customer-list audiences.** `--audience-type` on `tests create`
+  now accepts `open | basic | targeted | advanced | customer_list` (the API
+  accepted only `open` since launch — `--audiences` used to be silently
+  ignored). `--audiences <ids...>` attaches enroll segments (`advanced`) or
+  customer lists (`customer_list`); new `--demographics <json|@file>` filters
+  the panel (`targeted`, optionally `advanced`) with keys `gender, age, income,
+  education, continent, country`. All of it is validated locally — including
+  by `--dry-run` — before any API call, and `--audiences` on an `open` test is
+  now a loud error instead of the old silent no-op.
+- **Audience retargeting on `tests update`** — `--audience-type` (plus
+  `--audiences`/`--demographics`) replaces the draft's pending quota wholesale;
+  size carries over unless `--target-audience-size` is passed too. This is the
+  scripted clone-then-retarget flow: `tests clone` → `tests update
+  --audience-type ...`. The response echoes the resulting audience block as
+  confirmation.
+- **`audiences list --source enroll`** browses Helio's active panel catalog
+  (for `advanced`); the default `customer_list` source is unchanged. Every row
+  now shows a `source` column, and enroll rows render `—` for
+  `participants_count`/`tests_count`/`last_used_at` (no usage history in your
+  account — never `0`). `--recent` stays customer-list-only and errors with
+  `--source enroll`.
+- **UX metrics are readable from a fresh session.** `tests preview` renders a
+  **UX Metrics** block (metric type, question span, uuid) and tags metric-owned
+  questions inline (`— sentiment metric`) in both human and report views;
+  `--output json` gains a top-level `ux_metrics` block (same shape as the
+  create/add-ux-metrics summaries; key presence doubles as server-version
+  detection) and per-question `ux_metric: {id, type}`. Launched tests show the
+  score in the tag once computed.
+- **Repeated metric types are reorderable from a fresh session** — closes the
+  documented v0.7.0 gap. `tests order` keys repeated instances on their metric
+  uuid (`metric:<uuid>`, paste-ready) instead of flagging them ambiguous;
+  `remove-ux-metrics` uuids can likewise now be read from `preview`/`order`
+  instead of only from the mutation response that created the metric.
+- **`tests send` explains panel rejections.** A 502 means the Enroll platform
+  rejected the quota (commonly an audience too narrow to fill) — the CLI now
+  says nothing was charged and the test is still a draft, so retrying after
+  widening the audience is known-safe. Panel tests really launch recruiting;
+  customer-list tests enqueue invites; `test_take_url` stays `null` for
+  non-open tests by design.
+
 ## 0.7.0
 
 ### Breaking

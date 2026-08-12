@@ -233,6 +233,12 @@ export interface TestShowResponse {
   sections: SectionData[];
   /** Present since the 2026-07-30 API release; null when the test has no quota. */
   audience?: AudienceData | null;
+  /**
+   * Present since the 2026-08 API release, and OMITTED (not empty) when the
+   * test has no metrics — key presence doubles as server-version detection,
+   * so gate rendering on `'ux_metrics' in test`, not truthiness.
+   */
+  ux_metrics?: UxMetricSummaryEntry[];
   [key: string]: unknown;
 }
 
@@ -331,6 +337,66 @@ export interface HotspotData {
   [key: string]: unknown;
 }
 
+/**
+ * Metric membership for a section, in whichever vocabulary the server speaks.
+ * The 2026-08 API stamps metric-owned sections with `metric_id` (uuid) +
+ * `metric_type` and dropped the nested `ux_metric` object; older deploys still
+ * nest it (with the internal numeric id). Stamps win when both are present.
+ * null = hand-written question.
+ */
+export function sectionMetric(s: SectionData): { id: string | number | null; type: string } | null {
+  const raw = s as Record<string, unknown>;
+  if (typeof raw.metric_type === 'string' && raw.metric_type) {
+    const stampId = raw.metric_id;
+    return {
+      id: typeof stampId === 'string' || typeof stampId === 'number' ? stampId : null,
+      type: raw.metric_type,
+    };
+  }
+  const nested = raw.ux_metric as { metric_type?: string; id?: string | number } | null | undefined;
+  if (nested?.metric_type) {
+    return { id: nested.id ?? null, type: nested.metric_type };
+  }
+  return null;
+}
+
+/**
+ * One entry of the top-level `ux_metrics` summary GET /tests/:id returns since
+ * the 2026-08 API release — same shape the create/add-ux-metrics responses
+ * always had. `position` is the 1-based question number in the same numbering
+ * the `--position` / `add_ux_metrics_position` params accept (spec-pinned,
+ * including interleaved layouts), so it is safe to feed straight back.
+ */
+export interface UxMetricSummaryEntry {
+  id: string;
+  metric_type: string;
+  section_count: number;
+  sections: { section_id: string; type: string; position: number; instructions: string }[];
+  [key: string]: unknown;
+}
+
+/** Human question-span label for a summary entry: "2 questions: Q3–Q4". */
+export function uxMetricQuestionLabel(entry: UxMetricSummaryEntry): string {
+  const positions = entry.sections.map(s => s.position).sort((a, b) => a - b);
+  const noun = `${positions.length} question${positions.length === 1 ? '' : 's'}`;
+  if (positions.length === 0) return noun;
+  if (positions.length === 1) return `${noun}: Q${positions[0]}`;
+  const contiguous = positions.every((p, i) => i === 0 || p === positions[i - 1] + 1);
+  return contiguous
+    ? `${noun}: Q${positions[0]}–Q${positions[positions.length - 1]}`
+    : `${noun}: ${positions.map(p => `Q${p}`).join(', ')}`;
+}
+
+function printUxMetricsSummary(metrics: UxMetricSummaryEntry[] | undefined): void {
+  if (!metrics?.length) return;
+  console.log(`\x1b[1mUX Metrics\x1b[0m`);
+  const width = Math.max(...metrics.map(m => m.metric_type.length));
+  for (const m of metrics) {
+    console.log(`  ${m.metric_type.padEnd(width)}  (${uxMetricQuestionLabel(m)})  \x1b[90mid ${m.id}\x1b[0m`);
+  }
+  console.log();
+}
+
 /** Audience config of the test's current (most recent) quota. */
 export interface AudienceData {
   type: string;
@@ -374,6 +440,8 @@ interface ReportQuestion {
   question: string;
   response_count: number;
   has_followup: boolean;
+  /** Present on metric-owned questions since the 2026-08 API release. */
+  ux_metric?: { type: string; score?: number | null; label?: string | null };
   results: unknown;
   nps_score?: number;
   breakdown?: { promoters: CountPercent; passives: CountPercent; detractors: CountPercent };
@@ -497,50 +565,51 @@ export interface OrderBlock {
  * them distinct — block index drives `--order`, `question_number` is what a
  * human acts on.
  *
- * `ambiguous` marks an instance whose type is on the test more than once. The
- * API needs `metric:<uuid>` for those, and GET /tests/:id exposes only the
- * metric's numeric id — so the key here is not directly usable and the caller
- * has to say so rather than print a command that will 400.
+ * `ambiguous` marks a repeated-type instance the caller can't address: reorder
+ * needs `metric:<uuid>` to tell instances apart, and pre-2026-08 API versions
+ * only expose the metric's internal numeric id — so the `metric:<type>` key
+ * shown is for reading, not for pasting. With uuid stamps this never triggers.
  */
 export function buildOrderBlocks(rawSections: SectionData[]): OrderBlock[] {
   const sections = [...rawSections].sort((a, b) => a.position - b.position);
   const blocks: OrderBlock[] = [];
   const seenMetrics = new Set<string | number>();
 
-  const metricOf = (sec: SectionData) =>
-    (sec as Record<string, unknown>).ux_metric as { metric_type: string; id?: string | number } | null;
-
   // Instances are told apart by the metric's own id; fall back to the type when
   // a payload omits it, which collapses instances but never invents blocks.
-  const instanceKey = (m: { metric_type: string; id?: string | number }) => m.id ?? m.metric_type;
+  const instanceKey = (m: { type: string; id: string | number | null }) => m.id ?? m.type;
 
   const typeCounts = new Map<string, Set<string | number>>();
   for (const sec of sections) {
-    const m = metricOf(sec);
-    if (!m?.metric_type) continue;
-    const set = typeCounts.get(m.metric_type) ?? new Set();
+    const m = sectionMetric(sec);
+    if (!m) continue;
+    const set = typeCounts.get(m.type) ?? new Set();
     set.add(instanceKey(m));
-    typeCounts.set(m.metric_type, set);
+    typeCounts.set(m.type, set);
   }
 
   for (let qi = 0; qi < sections.length; qi++) {
     const s = sections[qi];
-    const uxMetric = metricOf(s);
-    if (uxMetric?.metric_type) {
-      const metricType = uxMetric.metric_type;
+    const uxMetric = sectionMetric(s);
+    if (uxMetric) {
+      const metricType = uxMetric.type;
       const key = instanceKey(uxMetric);
       if (seenMetrics.has(key)) continue;
       seenMetrics.add(key);
       const count = sections.filter(sec => {
-        const m = metricOf(sec);
-        return m?.metric_type && instanceKey(m) === key;
+        const m = sectionMetric(sec);
+        return m !== null && instanceKey(m) === key;
       }).length;
       const repeated = (typeCounts.get(metricType)?.size ?? 1) > 1;
       const instanceNumber = repeated
         ? [...(typeCounts.get(metricType) ?? [])].indexOf(key) + 1
         : undefined;
+      // A string id is a metric uuid stamp — the exact token reorder accepts,
+      // so repeated instances stop being ambiguous. Numeric ids come from the
+      // pre-2026-08 nested object and are not accepted as input.
+      const uuid = typeof uxMetric.id === 'string' ? uxMetric.id : null;
       blocks.push({
-        key: `metric:${metricType}`,
+        key: repeated && uuid ? `metric:${uuid}` : `metric:${metricType}`,
         label:
           `${metricType} metric` +
           (instanceNumber ? ` #${instanceNumber}` : '') +
@@ -548,7 +617,7 @@ export function buildOrderBlocks(rawSections: SectionData[]): OrderBlock[] {
         question_number: qi + 1,
         question_count: count,
         metric_type: metricType,
-        ambiguous: repeated || undefined,
+        ambiguous: (repeated && !uuid) || undefined,
       });
     } else {
       blocks.push({
@@ -588,7 +657,12 @@ function printReportQuestions(questions: ReportQuestion[]): void {
     const q = sorted[i];
     const label = typeLabel(q.type);
     const countStr = q.response_count != null ? ` (${q.response_count} responses)` : '';
-    console.log(`  \x1b[1mQ${i + 1}.\x1b[0m [${label}] ${q.question}${countStr}`);
+    // Report questions carry ux_metric: {type, score, label} once launched.
+    const metric = q.ux_metric;
+    const metricTag = metric?.type
+      ? `  \x1b[36m— ${metric.type} metric${metric.score != null ? ` (score ${metric.score}${metric.label ? ` — ${metric.label}` : ''})` : ''}\x1b[0m`
+      : '';
+    console.log(`  \x1b[1mQ${i + 1}.\x1b[0m [${label}] ${q.question}${countStr}${metricTag}`);
 
     const results = q.results as Record<string, unknown>[] | undefined;
 
@@ -625,7 +699,11 @@ function printSectionQuestions(sections: SectionData[]): void {
     const s = sorted[i];
     const label = typeLabel(s.type);
     const question = s.stripped_instructions || stripHtml(s.instructions || '');
-    console.log(`  \x1b[1mQ${i + 1}.\x1b[0m [${label}] ${question}`);
+    // Metric-owned questions are auto-generated and structurally locked; the
+    // tag is what stops a reader treating them as editable questions.
+    const metric = sectionMetric(s);
+    const metricTag = metric ? `  \x1b[36m— ${metric.type} metric\x1b[0m` : '';
+    console.log(`  \x1b[1mQ${i + 1}.\x1b[0m [${label}] ${question}${metricTag}`);
 
     if (s.likert_type) {
       console.log(`      Scale: ${s.likert_type}`);
@@ -656,7 +734,7 @@ function printSectionQuestions(sections: SectionData[]): void {
 function printHotspots(s: SectionData): void {
   if (!Array.isArray(s.hotspots)) return;
 
-  const metricType = (s as { ux_metric?: { metric_type?: string } }).ux_metric?.metric_type;
+  const metricType = sectionMetric(s)?.type;
   if (s.hotspots.length === 0) {
     const scored = metricType && UX_METRIC_TYPES[metricType]?.hotspot_scored;
     console.log(
@@ -782,7 +860,7 @@ export function buildHotspotSummary(sections: SectionData[] | undefined): unknow
   return ordered
     .filter(s => Array.isArray(s.hotspots))
     .map((s, _i) => {
-      const metricType = (s as { ux_metric?: { metric_type?: string } }).ux_metric?.metric_type ?? null;
+      const metricType = sectionMetric(s)?.type ?? null;
       return {
         question_number: ordered.indexOf(s) + 1,
         section_id: s.id,
@@ -826,19 +904,25 @@ function printAudience(audience: AudienceData | null | undefined): void {
   console.log();
 }
 
-function buildQuestionsFromSections(sections: SectionData[] | undefined): unknown[] {
+export function buildQuestionsFromSections(sections: SectionData[] | undefined): unknown[] {
   if (!sections?.length) return [];
   return [...sections]
     .sort((a, b) => a.position - b.position)
-    .map((s, i) => ({
-      position: i + 1,
-      type: s.type,
-      display_type: TYPE_LABELS[s.type] ?? s.type,
-      question: s.stripped_instructions || stripHtml(s.instructions || ''),
-      choices: s.variations?.[0]?.choices
-        ?.sort((a, b) => a.position - b.position)
-        .map(c => c.text) ?? [],
-    }));
+    .map((s, i) => {
+      const metric = sectionMetric(s);
+      return {
+        position: i + 1,
+        type: s.type,
+        display_type: TYPE_LABELS[s.type] ?? s.type,
+        question: s.stripped_instructions || stripHtml(s.instructions || ''),
+        choices: s.variations?.[0]?.choices
+          ?.sort((a, b) => a.position - b.position)
+          .map(c => c.text) ?? [],
+        // Metric-owned questions are auto-generated and structurally locked —
+        // agents must not treat them as editable hand-written questions.
+        ...(metric ? { ux_metric: { id: metric.id, type: metric.type } } : {}),
+      };
+    });
 }
 
 // Parses a JSON array from an inline string or @path/to/file.json, prefixing
@@ -1802,6 +1886,91 @@ export function assertFollowupChoicesInRange(followup: FollowupInput | undefined
   }
 }
 
+// ── Audience config validation ───────────────────────────────────────
+// Mirrors the 2026-08 POST/PATCH /tests contract so --dry-run catches what
+// used to be a launch-time 400: audiences is required for advanced and
+// customer_list, ignored server-side for open (the old silent-failure trap —
+// the CLI errors instead), rejected for basic/targeted; demographics is
+// required for targeted, optional for advanced, rejected elsewhere.
+
+export const AUDIENCE_TYPES = ['open', 'basic', 'targeted', 'advanced', 'customer_list'] as const;
+export const DEMOGRAPHIC_KEYS = ['gender', 'age', 'income', 'education', 'continent', 'country'] as const;
+
+export function validateAudienceConfig(config: {
+  audienceType: string;
+  audiences?: string[];
+  demographics?: unknown;
+}): string[] {
+  const { audienceType, audiences, demographics } = config;
+
+  if (!(AUDIENCE_TYPES as readonly string[]).includes(audienceType)) {
+    // Everything below keys off the type, so nothing else is checkable.
+    return [`Invalid --audience-type "${audienceType}". Valid types: ${AUDIENCE_TYPES.join(', ')}`];
+  }
+
+  const errors: string[] = [];
+
+  const hasAudiences = Array.isArray(audiences) && audiences.length > 0;
+  const takesAudiences = audienceType === 'advanced' || audienceType === 'customer_list';
+  if (takesAudiences && !hasAudiences) {
+    const listHint = audienceType === 'advanced' ? '"audiences list --source enroll"' : '"audiences list"';
+    errors.push(`--audiences is required for --audience-type ${audienceType} (pass ids from ${listHint})`);
+  }
+  if (!takesAudiences && hasAudiences) {
+    errors.push(
+      audienceType === 'open'
+        ? '--audiences is ignored on open tests (participants come from the share link) — use --audience-type advanced or customer_list to recruit these audiences'
+        : `--audiences is not accepted for --audience-type ${audienceType}; advanced and customer_list are the types that take audience ids`,
+    );
+  }
+
+  const takesDemographics = audienceType === 'targeted' || audienceType === 'advanced';
+  const demographicsPresent = demographics !== undefined && demographics !== null;
+  if (demographicsPresent && !takesDemographics) {
+    errors.push('--demographics is only accepted for --audience-type targeted or advanced');
+  }
+  let demographicKeyCount = 0;
+  if (demographicsPresent && takesDemographics) {
+    if (typeof demographics !== 'object' || Array.isArray(demographics)) {
+      errors.push(
+        '--demographics must be a JSON object of string arrays, e.g. {"age": ["25-34"], "country": ["United States"]}',
+      );
+    } else {
+      const entries = Object.entries(demographics as Record<string, unknown>);
+      demographicKeyCount = entries.length;
+      for (const [key, value] of entries) {
+        if (!(DEMOGRAPHIC_KEYS as readonly string[]).includes(key)) {
+          errors.push(`--demographics: unknown key "${key}". Valid keys: ${DEMOGRAPHIC_KEYS.join(', ')}`);
+        } else if (!Array.isArray(value) || value.length === 0 || value.some(v => typeof v !== 'string')) {
+          errors.push(`--demographics: "${key}" must be an array of strings, e.g. {"${key}": ["..."]}`);
+        }
+      }
+    }
+  }
+  if (audienceType === 'targeted' && demographicKeyCount === 0) {
+    errors.push('--demographics is required for --audience-type targeted');
+  }
+
+  return errors;
+}
+
+/**
+ * A 502 from send means the Enroll platform rejected the quota (commonly an
+ * audience too narrow to fill). The test stays draft and nothing is spent —
+ * say so, or the caller can't know a retry is safe.
+ */
+export function enrichSendError(err: unknown): unknown {
+  if (err instanceof HelioApiError && err.status === 502) {
+    return new HelioApiError(502, {
+      error:
+        `${err.message} — the panel rejected this quota (often an audience too narrow to fill). ` +
+        'Nothing was charged and the test is still a draft; adjust the audience and retry.',
+      upstream: err.body,
+    });
+  }
+  return err;
+}
+
 export function formatValidationErrors(errors: ValidationError[]): string {
   const lines = errors.map(e => {
     const prefix = e.question > 0 ? `  Question ${e.question}` : '  Questions';
@@ -1911,7 +2080,7 @@ export function buildWalkthroughScreens(test: TestShowResponse): WalkthroughScre
       ? [...variation.choices].sort((a, b) => a.position - b.position).map(c => c.text)
       : [];
 
-    const uxMetric = (s as { ux_metric?: { metric_type?: string } }).ux_metric?.metric_type;
+    const uxMetric = sectionMetric(s)?.type;
     const randomize = Boolean((s as { randomize_choices?: unknown }).randomize_choices);
     const allowMultiple = Boolean((s as { allow_multiple?: unknown }).allow_multiple);
 
@@ -2782,6 +2951,9 @@ export function registerTestsCommand(program: Command): void {
               introduction: test.introduction ?? null,
             },
             questions: reportData?.questions_summary ?? buildQuestionsFromSections(test.sections),
+            // Key presence is server-version detection: the 2026-08 API omits
+            // ux_metrics (rather than sending []) when a test has none.
+            ...('ux_metrics' in test ? { ux_metrics: test.ux_metrics } : {}),
             audience: test.audience ?? null,
             branching: buildBranchingSummary(test.sections),
             hotspots: buildHotspotSummary(test.sections),
@@ -2805,6 +2977,7 @@ export function registerTestsCommand(program: Command): void {
         console.log();
 
         printAudience(test.audience);
+        printUxMetricsSummary(test.ux_metrics);
 
         // Questions — prefer report data (has results), fall back to raw sections.
         // Report data carries results but not branching/hotspots, so a launched
@@ -2865,8 +3038,16 @@ export function registerTestsCommand(program: Command): void {
     .option('--project-name <name>', 'Project name (resolved to UUID)')
     .requiredOption('--name <name>', 'Test name')
     .requiredOption('--intro <text>', 'Introduction text')
-    .option('--audience-type <type>', 'Audience type', 'open')
-    .option('--audiences <ids...>', 'Audience segment IDs')
+    .option(
+      '--audience-type <type>',
+      'Audience type: open (share link), basic (panel, no filters), targeted (panel + --demographics), advanced (panel + --audiences), customer_list (your lists + --audiences)',
+      'open',
+    )
+    .option('--audiences <ids...>', 'Audience ids (required for advanced/customer_list; find them with "audiences list [--source enroll]")')
+    .option(
+      '--demographics <json>',
+      'Demographic filters as JSON object or @file (required for targeted, optional for advanced). Keys: gender, age, income, education, continent, country; values are string arrays.',
+    )
     .requiredOption('--target-audience-size <n>', 'Target number of responses')
     .option('--questions <json>', 'Questions as JSON array or @path/to/file.json')
     .option('--ux-metrics <types...>', 'UX metrics to add (auto-generates measurement questions; a type may be repeated, and each instance is scored separately). Click-backed and brand_score metrics need per-section overrides — see --ux-metrics-json.')
@@ -2891,6 +3072,17 @@ export function registerTestsCommand(program: Command): void {
 
         if (!questions && (!uxMetrics || uxMetrics.length === 0)) {
           throw new Error('Either --questions or --ux-metrics (or both) is required.');
+        }
+
+        const audienceType: string = cmdOpts.audienceType ?? 'open';
+        const demographics = cmdOpts.demographics ? parseJsonOrFile(cmdOpts.demographics) : undefined;
+        const audienceErrors = validateAudienceConfig({
+          audienceType,
+          audiences: cmdOpts.audiences,
+          demographics,
+        });
+        if (audienceErrors.length > 0) {
+          throw new Error(audienceErrors.join('\n'));
         }
 
         // Client-side validation
@@ -2938,12 +3130,14 @@ export function registerTestsCommand(program: Command): void {
             valid: true,
             name: cmdOpts.name,
             project_id: projectId,
-            audience_type: cmdOpts.audienceType ?? 'open',
+            audience_type: audienceType,
             target_audience_size: audienceSize,
             question_count: questionCount,
             total_sections: totalSections,
             estimated_answer_spend: spend,
           };
+          if (cmdOpts.audiences) summary.audiences = cmdOpts.audiences;
+          if (demographics !== undefined) summary.demographics = demographics;
           if (questions) {
             summary.questions = (questions as QuestionInput[]).map((q, i) => ({
               position: i + 1,
@@ -2992,6 +3186,12 @@ export function registerTestsCommand(program: Command): void {
             console.log(`  Name:          ${summary.name}`);
             console.log(`  Project:       ${projectId}`);
             console.log(`  Audience:      ${audienceSize} (${summary.audience_type})`);
+            if (cmdOpts.audiences) {
+              console.log(`  Audience ids:  ${(cmdOpts.audiences as string[]).join(', ')}`);
+            }
+            if (demographics !== undefined) {
+              console.log(`  Demographics:  ${Object.keys(demographics as Record<string, unknown>).join(', ')}`);
+            }
             console.log(`  Questions:     ${questionCount}`);
             if (uxMetricTypeNames.length > 0) {
               console.log(`  UX metrics:    ${uxMetricTypeNames.join(', ')} (${metricSectionCount} auto-generated sections)`);
@@ -3040,13 +3240,14 @@ export function registerTestsCommand(program: Command): void {
           project_id: projectId,
           name: cmdOpts.name,
           intro: cmdOpts.intro,
-          audience_type: cmdOpts.audienceType,
+          audience_type: audienceType,
           target_audience_size: parsePositiveInt(cmdOpts.targetAudienceSize, '--target-audience-size'),
         };
         if (questions) body.questions = questions;
         if (uxMetrics && uxMetrics.length > 0) body.ux_metrics = uxMetrics;
         if (cmdOpts.uxMetricContext) body.ux_metric_context = cmdOpts.uxMetricContext;
         if (cmdOpts.audiences) body.audiences = cmdOpts.audiences;
+        if (demographics !== undefined) body.demographics = demographics;
 
         const data = await client.post('tests', body);
         const metricWarnings = uxMetricWarnings(uxMetrics ?? []);
@@ -3494,15 +3695,22 @@ export function registerTestsCommand(program: Command): void {
 
   cmd
     .command('send <id>')
-    .description('Launch a draft test')
+    .description('Launch a draft test (panel tests start recruiting; customer-list tests enqueue invites)')
     .action(
       withErrorHandling(async (id: string) => {
         const client = makeClient(program);
-        const data = await client.post(`tests/${id}/send_test`);
+        let data: unknown;
+        try {
+          data = await client.post(`tests/${id}/send_test`);
+        } catch (err) {
+          throw enrichSendError(err);
+        }
         if (isJsonMode()) {
           printJson(data);
         } else {
           printKeyValue(data as Record<string, unknown>);
+          // test_take_url is null for non-open tests by design — participants
+          // come from the panel or list, so there is no link to hand out.
         }
       }),
     );
@@ -3546,10 +3754,19 @@ export function registerTestsCommand(program: Command): void {
 
   cmd
     .command('update <id>')
-    .description('Update a draft test')
+    .description('Update a draft test (fields, or replace the audience for the clone-then-retarget flow)')
     .option('--name <name>', 'New test name')
     .option('--intro <text>', 'New introduction text')
     .option('--target-audience-size <n>', 'New target audience size')
+    .option(
+      '--audience-type <type>',
+      'Replace the audience wholesale: open, basic, targeted, advanced, customer_list (draft tests only; size carries over unless --target-audience-size is also passed)',
+    )
+    .option('--audiences <ids...>', 'Audience ids (required for advanced/customer_list; needs --audience-type)')
+    .option(
+      '--demographics <json>',
+      'Demographic filters as JSON object or @file (required for targeted, optional for advanced; needs --audience-type). Keys: gender, age, income, education, continent, country.',
+    )
     .action(
       withErrorHandling(async (id: string, cmdOpts) => {
         const client = makeClient(program);
@@ -3558,16 +3775,48 @@ export function registerTestsCommand(program: Command): void {
         if (cmdOpts.intro) body.intro = cmdOpts.intro;
         if (cmdOpts.targetAudienceSize) body.target_audience_size = parsePositiveInt(cmdOpts.targetAudienceSize, '--target-audience-size');
 
+        // The audience is replaced wholesale, so the type anchors the change —
+        // the API 400s on audiences/demographics without it, and so do we.
+        const demographics = cmdOpts.demographics ? parseJsonOrFile(cmdOpts.demographics) : undefined;
+        if (cmdOpts.audienceType) {
+          const audienceErrors = validateAudienceConfig({
+            audienceType: cmdOpts.audienceType,
+            audiences: cmdOpts.audiences,
+            demographics,
+          });
+          if (audienceErrors.length > 0) {
+            throw new Error(audienceErrors.join('\n'));
+          }
+          body.audience_type = cmdOpts.audienceType;
+          if (cmdOpts.audiences) body.audiences = cmdOpts.audiences;
+          if (demographics !== undefined) body.demographics = demographics;
+        } else if (cmdOpts.audiences || demographics !== undefined) {
+          throw new Error(
+            '--audiences and --demographics replace the audience and require --audience-type to say what kind it becomes.',
+          );
+        }
+
         if (Object.keys(body).length === 0) {
-          throw new Error('At least one field is required: --name, --intro, or --target-audience-size');
+          throw new Error(
+            'At least one field is required: --name, --intro, --target-audience-size, or --audience-type',
+          );
         }
 
         const data = await client.patch(`tests/${id}`, body);
         if (isJsonMode()) {
           printJson(data);
         } else {
+          // The response echoes the audience summary — print it as
+          // confirmation of what the quota actually became.
+          const { audience, ...rest } = data as Record<string, unknown> & {
+            audience?: AudienceData | null;
+          };
           console.log(`\x1b[32m✓\x1b[0m Test updated`);
-          printKeyValue(data as Record<string, unknown>);
+          printKeyValue(rest);
+          if (audience) {
+            console.log();
+            printAudience(audience);
+          }
         }
       }),
     );

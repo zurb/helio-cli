@@ -147,6 +147,9 @@ helio-cli tests add-question <test-uuid> \
 # Preview and launch
 helio-cli tests preview <test-uuid>
 helio-cli tests send <test-uuid>
+# Panel tests start recruiting; customer-list tests enqueue invites. A 502 on
+# send means the panel rejected the quota (audience too narrow): nothing is
+# charged, the test stays draft, and retrying after adjusting is safe.
 
 # Walk through the test the way a participant sees it
 helio-cli tests walkthrough <test-uuid>                 # one screen per page, all at once
@@ -159,7 +162,7 @@ helio-cli tests participants <test-uuid> --group-by cohort    # cluster by cohor
 helio-cli tests participants <test-uuid> --sentiment negative --output json
 ```
 
-`preview` is a structural summary (every question on one page), and since the 2026-07-30 API release it also shows the test's **audience** configuration, per-question **branching**, and click-test **hotspots** — everything a scripted build writes is now readable back, so a pre-launch review can verify its own work. `--output json` emits those as `audience`, `branching` and `hotspots` blocks; `walkthrough` carries `branching` and `hotspots` on each screen. A click section with no hotspots is called out, since on a hotspot-scored metric that means it scores zero. `walkthrough` renders each participant screen separately — intro, then each question with its own input UI (radio buttons, text box, NPS row, etc.) — so you can comprehend the experience step by step. Asset-heavy types (prototypes, click tests, tree tests) render a placeholder pointing to the Helio browser preview.
+`preview` is a structural summary (every question on one page), and it reads back everything a scripted build writes, so a pre-launch review can verify its own work: the test's **audience** configuration, its **UX metrics** (which metric owns which questions, with the metric uuids that `reorder` and `remove-ux-metrics` accept), per-question **branching**, and click-test **hotspots**. Metric-owned questions are tagged inline (e.g. `— sentiment metric`) — they are auto-generated and structurally locked, so edit them through the metric, not as hand-written questions. `--output json` emits `ux_metrics`, `audience`, `branching` and `hotspots` blocks; `walkthrough` carries `branching` and `hotspots` on each screen. A click section with no hotspots is called out, since on a hotspot-scored metric that means it scores zero. `walkthrough` renders each participant screen separately — intro, then each question with its own input UI (radio buttons, text box, NPS row, etc.) — so you can comprehend the experience step by step. Asset-heavy types (prototypes, click tests, tree tests) render a placeholder pointing to the Helio browser preview.
 
 `participants` is the report seen one respondent at a time: where `walkthrough` shows the empty test structure and `tests report` shows aggregates, `participants` stitches each person's answers together in order — the rating, the follow-up "why", and that answer's sentiment, plus demographics, audience type, and cohorts. It accepts the same demographic/segment/sentiment filters as `report`, supports `--group-by cohort|audience_type`, and emits flat `{ study, participants: [...] }` JSON for piping into `jq`. It's a convenience wrapper over `tests report --include participants`. Note: `cohorts` is empty for non-enroll recruits, and `sentiment` / prototype grade are eventually consistent — a `null` means "not computed yet" (shown as *pending*), never neutral.
 
@@ -360,7 +363,32 @@ helio-cli tests reorder <test-uuid> \
     --order "metric:sentiment" "section:<q1-uuid>" "section:<q2-uuid>"
 ```
 
-`order` lists one block per UX metric **instance**, not per type. A metric type that is on the test more than once must be addressed as `metric:<uuid>` — `metric:<type>` can't say which instance you mean and is rejected. `order` flags those blocks and does not print a paste-ready command for them; the uuids come from the `ux_metrics` summary in the response to the `create` or `add-ux-metrics` call that added them, since `tests get` does not return metric uuids.
+`order` lists one block per UX metric **instance**, not per type. A metric type that is on the test more than once must be addressed as `metric:<uuid>` — `metric:<type>` can't say which instance you mean and is rejected. `order` prints the uuid keys directly, since `GET /tests/:id` returns metric uuids as of the 2026-08 API release; only against older API deploys are repeated-type blocks flagged as unaddressable.
+
+### Audiences
+
+Five audience types decide who takes the test — pick one at create time or replace it later. Default is `open` (share link; you distribute the URL yourself). The other four recruit for you: `basic` (Helio panel, no filters), `targeted` (panel + demographics), `advanced` (saved panel segments), `customer_list` (your own lists).
+
+```bash
+# Find audience ids — they are exactly what --audiences accepts
+helio-cli audiences list --name "designers" --source enroll   # Helio panel segments (advanced)
+helio-cli audiences list --recent                             # your customer lists, recently used first
+helio-cli audiences get <id>
+helio-cli audiences clone <id>
+
+# Recruit at create time
+helio-cli tests create ... --audience-type targeted \
+    --demographics '{"age":["25-34","35-44"],"country":["United States"]}'
+helio-cli tests create ... --audience-type advanced --audiences <enroll-id>
+helio-cli tests create ... --audience-type customer_list --audiences <list-id>
+
+# Or retarget an existing draft (clone-then-retarget flow)
+helio-cli tests clone <test-uuid>
+helio-cli tests update <new-uuid> --audience-type targeted \
+    --demographics '{"education":["Bachelor degree"]}'
+```
+
+`--demographics` keys: `gender`, `age`, `income`, `education`, `continent`, `country` — values are string arrays. Required for `targeted`, optional for `advanced`, rejected elsewhere. `--audiences` is required for `advanced`/`customer_list` and rejected for the other types — including `open`, where the server would silently ignore it (the old trap: a test that looks fine and recruits nobody). On `tests update`, `--audience-type` replaces the pending quota wholesale; size carries over unless `--target-audience-size` is passed too. Audience changes are draft-only (running tests 422). Enroll rows in `audiences list` show `—` for participants/tests/last-used — a panel segment has no usage history in your account.
 
 ## Command Aliases
 
