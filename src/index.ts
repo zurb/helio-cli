@@ -64,7 +64,7 @@ program
 registerAuthCommand(program);
 registerConfigCommand(program);
 registerStatusCommand(program);
-registerDoctorCommand(program);
+registerDoctorCommand(program, pkg.version);
 registerUpdateCommand(program, pkg.version);
 registerGuideCommand(program);
 

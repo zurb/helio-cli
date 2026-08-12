@@ -3,14 +3,38 @@ import { Command } from 'commander';
 import { CONFIG_FILE, getConfigValue } from '../config.js';
 import { HelioClient } from '../client.js';
 import { isJsonMode, printJson, withErrorHandling } from '../output.js';
+import {
+  fetchLatestVersion,
+  isNewerVersion,
+  updateCheckDisabled,
+  writeUpdateCache,
+} from '../update-check.js';
 
-interface Check {
+export interface Check {
   name: string;
   status: 'pass' | 'fail' | 'warn';
   message: string;
 }
 
-export function registerDoctorCommand(program: Command): void {
+export function buildVersionCheck(current: string, latest: string | null): Check {
+  if (!latest) {
+    return {
+      name: 'CLI version',
+      status: 'warn',
+      message: `${current} (could not reach the npm registry to check for updates)`,
+    };
+  }
+  if (isNewerVersion(latest, current)) {
+    return {
+      name: 'CLI version',
+      status: 'warn',
+      message: `${current} (${latest} available — run \`helio-cli update\`)`,
+    };
+  }
+  return { name: 'CLI version', status: 'pass', message: `${current} (up to date)` };
+}
+
+export function registerDoctorCommand(program: Command, currentVersion: string): void {
   program
     .command('doctor')
     .description('Diagnose configuration and connectivity issues')
@@ -81,6 +105,20 @@ export function registerDoctorCommand(program: Command): void {
         checks.push({ name: 'Node.js', status: 'warn', message: `${nodeVersion} (22+ recommended)` });
       } else {
         checks.push({ name: 'Node.js', status: 'fail', message: `${nodeVersion} (22+ required)` });
+      }
+
+      // 7. CLI version freshness
+      if (updateCheckDisabled()) {
+        checks.push({
+          name: 'CLI version',
+          status: 'pass',
+          message: `${currentVersion} (update check disabled)`,
+        });
+      } else {
+        const latest = await fetchLatestVersion();
+        // Refresh the cache so the passive stderr notice agrees with what doctor reported.
+        if (latest) writeUpdateCache({ lastCheckedAt: Date.now(), latestVersion: latest });
+        checks.push(buildVersionCheck(currentVersion, latest));
       }
 
       // Output

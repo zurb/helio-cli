@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.8.1
+
+### Added
+- **`doctor` now checks CLI freshness.** A seventh check, `CLI version`,
+  compares the running version against the npm registry: `pass (up to date)`,
+  or a `warn` naming the newer version and pointing at `helio-cli update`. A
+  stale CLI or an unreachable registry never fails doctor's exit code. When
+  `HELIO_NO_UPDATE_CHECK` or `CI` is set, doctor skips the network hit and
+  reports `(update check disabled)`. A successful fetch also refreshes the
+  update-notice cache so the passive stderr notice agrees with doctor.
+- **`guide --output json` lists `doctor` and `update`.** The JSON guide's
+  `commands` object previously omitted both top-level commands, so agents
+  reading it couldn't discover the updater. The `update` entry documents
+  `--check` and the `HELIO_NO_UPDATE_CHECK=1` opt-out.
+
 ## 0.8.0
 
 Ships against the 2026-08 Public API release (audience recruiting + UX metric

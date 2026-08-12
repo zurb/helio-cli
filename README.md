@@ -22,7 +22,7 @@ The CLI checks the npm registry for new versions at most once a day and prints a
 helio-cli update
 ```
 
-`helio-cli update --check` reports whether a newer version exists without installing. If the CLI was installed with pnpm, Yarn, Volta, or run via npx, `update` prints the matching command instead of using npm. Set `HELIO_NO_UPDATE_CHECK=1` (any value other than `0`, `false`, or empty) to disable the background check entirely; it is also skipped when `CI` is set.
+`helio-cli update --check` reports whether a newer version exists without installing. If the CLI was installed with pnpm, Yarn, Volta, or run via npx, `update` prints the matching command instead of using npm. `helio-cli doctor` also includes a "CLI version" check that warns when a newer version is available. Set `HELIO_NO_UPDATE_CHECK=1` (any value other than `0`, `false`, or empty) to disable the background check entirely (doctor then reports the check as disabled); it is also skipped when `CI` is set.
 
 ## Authentication
 
@@ -431,8 +431,12 @@ Errors also return structured JSON: `{ "error": "message", "code": 401 }`
 ## Troubleshooting
 
 ```bash
-# Run diagnostics
+# Run diagnostics (includes a CLI up-to-date check)
 helio-cli doctor
+
+# Update to the latest version
+helio-cli update
+helio-cli update --check    # check only, don't install
 
 # Check auth status
 helio-cli auth status
