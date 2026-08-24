@@ -110,16 +110,21 @@ const QUESTION_TYPES = {
     response_fields: 'rankings: [{choice: {id, text}, rank}] sorted by rank',
   },
   preference: {
-    description: 'Choose a preferred option (text-only via API, images via UI)',
+    description: 'Choose a preferred option, each option an image (side-by-side comparison)',
     creatable: true,
     also_accepts: 'Preference',
-    required: ['type', 'instructions', 'choices'],
+    required: ['type', 'instructions', 'variations'],
     optional: [],
     example: {
       type: 'preference',
-      instructions: 'Which option do you prefer?',
-      choices: ['Option A', 'Option B', 'Option C'],
+      instructions: 'Which do you prefer?',
+      variations: [
+        { name: 'Data In', asset_id: 61016 },
+        { name: 'The Vertical', asset_id: 61017, site_link: 'https://example.com' },
+      ],
     },
+    notes:
+      'The options are variations, not choices — one full-size image each, which is what GET /tests/:id reads them back as. Each option is either a plain string or an object {name (or text), asset_id?, site_link?}, and the two forms can be mixed. asset_id must be an IMAGE asset on the test\'s own account (upload via `assets upload`). `choices` is still accepted as a legacy alias, but passing both is a 400. An option with no asset_id is a valid draft; `tests validate` reports the missing image as a launch blocker.',
     summary_fields: 'results: [{id, text, percent, count, image_url?}]',
     response_fields: 'selected_variation: {id, name}',
   },
@@ -692,6 +697,36 @@ function printReportQuestions(questions: ReportQuestion[]): void {
   }
 }
 
+/** One preference option, read back from the variation that carries it. */
+export interface PreferenceOption {
+  name: string;
+  asset_id: number | string | null;
+  has_asset: boolean;
+  site_link: string | null;
+}
+
+/**
+ * A preference section's options are its VARIATIONS — one full-size image each
+ * — not the Choice records every other type hangs off `variations[0]`. Reading
+ * them as choices is why a preference question used to render with no options
+ * at all, and why a payload mirrored out of a preview was unusable as a write.
+ *
+ * Returns null for every other section type, so callers can keep their
+ * existing choice path.
+ */
+export function preferenceOptions(s: SectionData): PreferenceOption[] | null {
+  const canonical = RAW_TYPE_TO_CANONICAL[s.type] ?? s.type;
+  if (canonical !== 'preference') return null;
+  return (s.variations ?? []).map(v => ({
+    name: v.name,
+    asset_id: v.asset_id ?? null,
+    // An option with no image is a valid draft but a launch blocker, so this
+    // leans on every signal the payload offers rather than asset_id alone.
+    has_asset: Boolean(v.has_asset || v.asset_id != null || v.screenshot_url || v.thumb_url),
+    site_link: v.site_link ?? null,
+  }));
+}
+
 function printSectionQuestions(sections: SectionData[]): void {
   const sorted = [...sections].sort((a, b) => a.position - b.position);
   const qIndex = buildQuestionNumberIndex(sections);
@@ -709,13 +744,19 @@ function printSectionQuestions(sections: SectionData[]): void {
       console.log(`      Scale: ${s.likert_type}`);
     }
 
-    // Show choices from first variation
-    const variation = s.variations?.[0];
-    if (variation?.choices?.length) {
-      const choices = [...variation.choices].sort((a, b) => a.position - b.position);
-      const letters = 'abcdefghijklmnopqrstuvwxyz';
-      for (let c = 0; c < choices.length; c++) {
-        console.log(`      ${letters[c] ?? c + 1}) ${choices[c].text}`);
+    // Preference options live on the variations; every other type hangs its
+    // choices off the first one.
+    const options = preferenceOptions(s);
+    if (options) {
+      printPreferenceOptions(options);
+    } else {
+      const variation = s.variations?.[0];
+      if (variation?.choices?.length) {
+        const choices = [...variation.choices].sort((a, b) => a.position - b.position);
+        const letters = 'abcdefghijklmnopqrstuvwxyz';
+        for (let c = 0; c < choices.length; c++) {
+          console.log(`      ${letters[c] ?? c + 1}) ${choices[c].text}`);
+        }
       }
     }
 
@@ -724,6 +765,23 @@ function printSectionQuestions(sections: SectionData[]): void {
 
     console.log();
   }
+}
+
+/**
+ * A preference option with no image is what `tests validate` calls a launch
+ * blocker, and nothing else in the payload hints at it — so the missing image
+ * is the thing worth saying out loud, exactly as a hotspot-less click section
+ * is.
+ */
+function printPreferenceOptions(options: PreferenceOption[]): void {
+  const letters = 'abcdefghijklmnopqrstuvwxyz';
+  options.forEach((o, i) => {
+    const image = o.has_asset
+      ? `\x1b[90m🖼 asset ${o.asset_id ?? '(attached)'}\x1b[0m`
+      : `\x1b[33m⚠ no image — launch blocker\x1b[0m`;
+    const link = o.site_link ? `  \x1b[90m→ ${o.site_link}\x1b[0m` : '';
+    console.log(`      ${letters[i] ?? i + 1}) ${o.name}  ${image}${link}`);
+  });
 }
 
 /**
@@ -899,7 +957,12 @@ function printAudience(audience: AudienceData | null | undefined): void {
   if (audience.screener) console.log(`  screener: ${audience.screener.name}`);
   if (audience.allow_retake) console.log(`  retakes allowed`);
   if (audience.exclude_test_ids?.length) {
-    console.log(`  excludes participants from ${audience.exclude_test_ids.length} test(s)`);
+    // The ids are what --exclude-tests takes back, so print them rather than
+    // only their count — this block is the round-trip.
+    console.log(`  excludes participants from ${audience.exclude_test_ids.length} test(s):`);
+    for (const excluded of audience.exclude_test_ids) {
+      console.log(`    ${excluded}`);
+    }
   }
   console.log();
 }
@@ -910,14 +973,23 @@ export function buildQuestionsFromSections(sections: SectionData[] | undefined):
     .sort((a, b) => a.position - b.position)
     .map((s, i) => {
       const metric = sectionMetric(s);
+      // A preference question's options are variations, and that is also the
+      // key a write takes — so emit them under the name they can be sent back
+      // under, rather than the empty `choices` list this used to produce.
+      const options = preferenceOptions(s);
       return {
         position: i + 1,
         type: s.type,
         display_type: TYPE_LABELS[s.type] ?? s.type,
         question: s.stripped_instructions || stripHtml(s.instructions || ''),
-        choices: s.variations?.[0]?.choices
-          ?.sort((a, b) => a.position - b.position)
-          .map(c => c.text) ?? [],
+        ...(options
+          ? { variations: options }
+          : {
+              choices:
+                s.variations?.[0]?.choices
+                  ?.sort((a, b) => a.position - b.position)
+                  .map(c => c.text) ?? [],
+            }),
         // Metric-owned questions are auto-generated and structurally locked —
         // agents must not treat them as editable hand-written questions.
         ...(metric ? { ux_metric: { id: metric.id, type: metric.type } } : {}),
@@ -983,6 +1055,10 @@ interface QuestionInput {
   type?: string;
   instructions?: string;
   choices?: unknown[];
+  /** Preference options (strings or {name, asset_id?, site_link?}). */
+  variations?: unknown[];
+  /** Never a real field — carried only so validation can reject it by name. */
+  asset_ids?: unknown;
   scale_type?: string;
   custom_choices?: unknown[];
   allow_multiple?: boolean;
@@ -1401,6 +1477,117 @@ function validateUxMetricSectionOverrides(
   // sending. uxMetricWarnings() surfaces them; `tests validate` is the gate.
 }
 
+/** Keys the API reads off one preference option. Everything else is dropped. */
+const PREFERENCE_OPTION_KEYS = new Set(['name', 'text', 'asset_id', 'site_link']);
+
+/** Loose on purpose: the API owns "does this asset exist and is it an image". */
+function looksLikeAssetId(value: unknown): boolean {
+  if (typeof value === 'number') return Number.isInteger(value) && value > 0;
+  return typeof value === 'string' && value.trim() !== '';
+}
+
+/**
+ * A preference question's options are PreferenceVariation records — one
+ * full-size image each — not the Choice records every other type uses. That is
+ * why GET /tests/:id has always read them back under `variations`, and why
+ * mirroring a GET into a write payload used to fail with `choices missing for
+ * preference`. Since the 2026-08-23 API release `variations` is the canonical
+ * write key and carries an image per option; `choices` survives as a legacy
+ * alias, and passing both is a 400.
+ *
+ * Errors are named for whichever key the caller actually used, so the field
+ * path points into the payload in front of them rather than at the key we
+ * would have preferred.
+ */
+function validatePreferenceVariations(q: QuestionInput, num: number, errors: ValidationError[]): void {
+  const hasVariations = q.variations !== undefined;
+  const hasChoices = q.choices !== undefined;
+
+  if (hasVariations && hasChoices) {
+    errors.push({
+      question: num,
+      field: 'variations',
+      message:
+        'Pass variations or choices for preference, not both. variations is canonical; choices is a legacy alias.',
+    });
+    return;
+  }
+
+  // Pre-2026-08-23 scripts paired option strings with a parallel asset_ids
+  // array. The API took it with a 200 and ignored it, so every variation came
+  // back imageless — exactly the silent failure worth naming.
+  if (q.asset_ids !== undefined) {
+    errors.push({
+      question: num,
+      field: 'asset_ids',
+      message: 'Not a preference field (it was silently ignored) — put asset_id on each variation instead',
+    });
+  }
+
+  const field = hasChoices ? 'choices' : 'variations';
+  const items = hasChoices ? q.choices : q.variations;
+
+  if (!Array.isArray(items) || items.length < 2) {
+    errors.push({
+      question: num,
+      // Names the key in front of the caller, defaulting to the canonical one
+      // when they supplied neither.
+      field,
+      message: 'Required: array of at least 2 options, each a name string or {name, asset_id?, site_link?}',
+    });
+    return;
+  }
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const itemField = `${field}[${i}]`;
+
+    if (typeof item === 'string') {
+      if (!item.trim()) {
+        errors.push({ question: num, field: itemField, message: 'Needs a name (non-empty string)' });
+      }
+      continue;
+    }
+
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      errors.push({
+        question: num,
+        field: itemField,
+        message: 'Each option must be a name string or an object {name, asset_id?, site_link?}',
+      });
+      continue;
+    }
+
+    const option = item as Record<string, unknown>;
+    const name = option.name ?? option.text;
+    if (typeof name !== 'string' || !name.trim()) {
+      errors.push({ question: num, field: itemField, message: 'Needs a name (or text) — a non-empty string' });
+    }
+    if (option.asset_id !== undefined && !looksLikeAssetId(option.asset_id)) {
+      errors.push({
+        question: num,
+        field: `${itemField}.asset_id`,
+        message: 'Must be an image asset id (from `assets upload`, or `assets list --type image`)',
+      });
+    }
+    if (option.site_link !== undefined && (typeof option.site_link !== 'string' || !option.site_link.trim())) {
+      errors.push({ question: num, field: `${itemField}.site_link`, message: 'Must be a non-empty URL string' });
+    }
+
+    // One error per option, not per key: a payload mirrored back from a GET
+    // carries a dozen read-only fields, and listing them once says "this came
+    // from a read" far more clearly than a dozen identical lines.
+    const extras = Object.keys(option).filter(k => !PREFERENCE_OPTION_KEYS.has(k));
+    if (extras.length > 0) {
+      errors.push({
+        question: num,
+        field: itemField,
+        message: `Not accepted on an option and silently dropped: ${extras.join(', ')}. Keys are name (or text), asset_id, site_link.`,
+      });
+    }
+  }
+}
+
 function validateStringItems(items: unknown[], field: string, questionNum: number, errors: ValidationError[]): void {
   for (let i = 0; i < items.length; i++) {
     if (typeof items[i] !== 'string' || !(items[i] as string).trim()) {
@@ -1549,15 +1736,15 @@ export function validateQuestions(
     }
 
     if (canonical === 'preference') {
-      if (!Array.isArray(q.choices) || q.choices.length < 2) {
-        errors.push({
-          question: num,
-          field: 'choices',
-          message: 'Required: array of at least 2 choice strings',
-        });
-      } else {
-        validateStringItems(q.choices, 'choices', num, errors);
-      }
+      validatePreferenceVariations(q, num, errors);
+    } else if (q.variations !== undefined) {
+      // `variations` on any other type is a 400 upstream rather than a silent
+      // drop, so say the same thing here and name the key that type does take.
+      errors.push({
+        question: num,
+        field: 'variations',
+        message: `variations is preference-only — ${canonical} takes its options as choices`,
+      });
     }
 
     if (canonical === 'matrix') {
@@ -1896,12 +2083,98 @@ export function assertFollowupChoicesInRange(followup: FollowupInput | undefined
 export const AUDIENCE_TYPES = ['open', 'basic', 'targeted', 'advanced', 'customer_list'] as const;
 export const DEMOGRAPHIC_KEYS = ['gender', 'age', 'income', 'education', 'continent', 'country'] as const;
 
+/** The only audience types the editor offers "+ Exclude Participants" on. */
+export const PANEL_AUDIENCE_TYPES = ['basic', 'targeted', 'advanced'] as const;
+
+/** The editor's own cap (`canAddExclusion`). internal_group accounts get 30. */
+export const MAX_EXCLUDE_TEST_IDS = 5;
+
+/**
+ * What the CLI can judge about `exclude_test_ids` without knowing the account.
+ *
+ * The API applies three gates: the account's `beta_group` flag, panel
+ * audiences only, and a per-test cap of 5 (30 for `internal_group`). Only the
+ * middle one is visible from here, and only when the audience type is part of
+ * the same request — on `tests update --exclude-tests` alone the quota keeps
+ * whatever type it already has, so that check is left to the server.
+ *
+ * Clearing the list is exempt from every gate upstream so a test can always be
+ * undone; `--clear-exclude-tests` therefore never reaches this function.
+ */
+export function validateExcludeTestIds(config: {
+  excludeTestIds?: string[];
+  /** Only when the same request sets it — otherwise the panel gate is skipped. */
+  audienceType?: string;
+  /** The test being updated, so it can be caught excluding itself. */
+  testId?: string;
+}): string[] {
+  const { excludeTestIds, audienceType, testId } = config;
+  if (!excludeTestIds || excludeTestIds.length === 0) return [];
+
+  const errors: string[] = [];
+
+  if (audienceType && !(PANEL_AUDIENCE_TYPES as readonly string[]).includes(audienceType)) {
+    errors.push(
+      `--exclude-tests applies to panel audiences only (${PANEL_AUDIENCE_TYPES.join(', ')}); --audience-type ${audienceType} recruits from ${
+        audienceType === 'open' ? 'a share link' : 'your own customer lists'
+      }, where the editor offers no exclusions either`,
+    );
+  }
+
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (let i = 0; i < excludeTestIds.length; i++) {
+    const id = excludeTestIds[i];
+    if (typeof id !== 'string' || !id.trim()) {
+      errors.push(`--exclude-tests[${i}] must be a non-empty test id (a test uuid, or its report_uuid)`);
+      continue;
+    }
+    if (seen.has(id)) duplicates.add(id);
+    seen.add(id);
+  }
+
+  if (duplicates.size > 0) {
+    errors.push(`--exclude-tests names the same test more than once: ${[...duplicates].join(', ')}`);
+  }
+
+  if (testId && seen.has(testId)) {
+    errors.push(
+      `--exclude-tests cannot exclude the test itself (${testId}) — exclusion is about who took a DIFFERENT test`,
+    );
+  }
+
+  return errors;
+}
+
+/**
+ * Account-gated exclusion rules, which the CLI cannot check and the server
+ * enforces. Surfaced the same way the Enterprise branching gate is: as a
+ * warning at the point of use, not a local error that would falsely block an
+ * account that does have the entitlement.
+ */
+export function excludeTestWarnings(excludeTestIds?: string[]): string[] {
+  if (!excludeTestIds?.length) return [];
+
+  const warnings = [
+    'Audience exclusions need the beta_group flag on your account. Validation cannot see it, so this may still fail with a 400.',
+  ];
+  if (excludeTestIds.length > MAX_EXCLUDE_TEST_IDS) {
+    warnings.push(
+      `${excludeTestIds.length} exclusions given; the cap is ${MAX_EXCLUDE_TEST_IDS} per test unless the account is internal_group (30). Over the cap the API 400s and writes nothing.`,
+    );
+  }
+  return warnings;
+}
+
 export function validateAudienceConfig(config: {
   audienceType: string;
   audiences?: string[];
   demographics?: unknown;
+  excludeTestIds?: string[];
+  /** The test being updated, so it can be caught excluding itself. */
+  testId?: string;
 }): string[] {
-  const { audienceType, audiences, demographics } = config;
+  const { audienceType, audiences, demographics, excludeTestIds, testId } = config;
 
   if (!(AUDIENCE_TYPES as readonly string[]).includes(audienceType)) {
     // Everything below keys off the type, so nothing else is checkable.
@@ -1950,6 +2223,8 @@ export function validateAudienceConfig(config: {
   if (audienceType === 'targeted' && demographicKeyCount === 0) {
     errors.push('--demographics is required for --audience-type targeted');
   }
+
+  errors.push(...validateExcludeTestIds({ excludeTestIds, audienceType, testId }));
 
   return errors;
 }
@@ -2006,6 +2281,12 @@ export type WalkthroughScreen =
       raw_type: string;        // original API type (e.g. MultipleChoiceDirectiveSection)
       question: string;
       choices: string[];
+      /**
+       * Preference screens only. `choices` carries the same names for the
+       * renderer, but only this says which options actually have an image —
+       * and an imageless option is a launch blocker.
+       */
+      preference_options?: PreferenceOption[];
       randomize_choices: boolean;
       allow_multiple: boolean;
       scale_type?: string;
@@ -2076,9 +2357,14 @@ export function buildWalkthroughScreens(test: TestShowResponse): WalkthroughScre
     qNumber += 1;
     const canonical = RAW_TYPE_TO_CANONICAL[s.type] ?? s.type;
     const variation = s.variations?.[0];
-    const choices = variation?.choices
-      ? [...variation.choices].sort((a, b) => a.position - b.position).map(c => c.text)
-      : [];
+    // Preference options are the variations themselves — without this a
+    // preference screen rendered with no options at all.
+    const options = preferenceOptions(s);
+    const choices = options
+      ? options.map(o => o.name)
+      : variation?.choices
+        ? [...variation.choices].sort((a, b) => a.position - b.position).map(c => c.text)
+        : [];
 
     const uxMetric = sectionMetric(s)?.type;
     const randomize = Boolean((s as { randomize_choices?: unknown }).randomize_choices);
@@ -2105,6 +2391,7 @@ export function buildWalkthroughScreens(test: TestShowResponse): WalkthroughScre
       raw_type: s.type,
       question: s.stripped_instructions || stripHtml(s.instructions || ''),
       choices,
+      ...(options ? { preference_options: options } : {}),
       randomize_choices: randomize,
       allow_multiple: allowMultiple,
       scale_type: s.likert_type || undefined,
@@ -2276,11 +2563,21 @@ export function renderWalkthroughScreen(screen: WalkthroughScreen): string[] {
       break;
     }
     case 'preference': {
+      const options = screen.preference_options;
       for (let i = 0; i < screen.choices.length; i++) {
-        lines.push(`    ${LETTERS[i] ?? i + 1}) ⬚ ${screen.choices[i]}`);
+        // Each option is an image slot. An empty one blocks launch and looks
+        // identical to a filled one from the participant view, so name it.
+        const missing = options && !options[i]?.has_asset;
+        const flag = missing ? '  \x1b[33m⚠ no image\x1b[0m' : '';
+        lines.push(`    ${LETTERS[i] ?? i + 1}) ⬚ ${screen.choices[i]}${flag}`);
       }
       lines.push('');
-      lines.push('  \x1b[90m⚏ side-by-side images — open in browser for full view\x1b[0m');
+      const blockers = options?.filter(o => !o.has_asset).length ?? 0;
+      lines.push(
+        blockers > 0
+          ? `  \x1b[33m⚠ ${blockers} of ${screen.choices.length} options have no image — this test cannot launch\x1b[0m`
+          : '  \x1b[90m⚏ side-by-side images — open in browser for full view\x1b[0m',
+      );
       break;
     }
     case 'matrix':
@@ -2632,6 +2929,9 @@ export function walkthroughScreenJson(screen: WalkthroughScreen): Record<string,
     raw_type: screen.raw_type,
     question: screen.question,
     choices: screen.choices,
+    // Preference only — null everywhere else, so key presence says "these
+    // options are image slots" without the consumer decoding raw_type.
+    preference_options: screen.preference_options ?? null,
     randomize_choices: screen.randomize_choices,
     allow_multiple: screen.allow_multiple,
     scale_type: screen.scale_type ?? null,
@@ -2726,6 +3026,12 @@ export function registerTestsCommand(program: Command): void {
               if ('custom_example' in schema) {
                 console.log(`\nCustom scale example:`);
                 console.log(JSON.stringify((schema as { custom_example: unknown }).custom_example, null, 2));
+              }
+              // JSON consumers have always seen these; text mode used to drop
+              // them, which hid the rules that only live here (preference's
+              // variations/choices aliasing, click_test's hotspot semantics).
+              if ('notes' in schema) {
+                console.log(`\nNotes: ${(schema as { notes: string }).notes}`);
               }
               console.log();
             }
@@ -3048,6 +3354,10 @@ export function registerTestsCommand(program: Command): void {
       '--demographics <json>',
       'Demographic filters as JSON object or @file (required for targeted, optional for advanced). Keys: gender, age, income, education, continent, country; values are string arrays.',
     )
+    .option(
+      '--exclude-tests <ids...>',
+      'Test ids whose participants must not take this one (panel audiences only; max 5, or 30 on internal_group accounts). Exclusion is symmetric, so a mutually exclusive set needs one entry per pair, not per test.',
+    )
     .requiredOption('--target-audience-size <n>', 'Target number of responses')
     .option('--questions <json>', 'Questions as JSON array or @path/to/file.json')
     .option('--ux-metrics <types...>', 'UX metrics to add (auto-generates measurement questions; a type may be repeated, and each instance is scored separately). Click-backed and brand_score metrics need per-section overrides — see --ux-metrics-json.')
@@ -3080,6 +3390,7 @@ export function registerTestsCommand(program: Command): void {
           audienceType,
           audiences: cmdOpts.audiences,
           demographics,
+          excludeTestIds: cmdOpts.excludeTests,
         });
         if (audienceErrors.length > 0) {
           throw new Error(audienceErrors.join('\n'));
@@ -3138,6 +3449,7 @@ export function registerTestsCommand(program: Command): void {
           };
           if (cmdOpts.audiences) summary.audiences = cmdOpts.audiences;
           if (demographics !== undefined) summary.demographics = demographics;
+          if (cmdOpts.excludeTests) summary.exclude_test_ids = cmdOpts.excludeTests;
           if (questions) {
             summary.questions = (questions as QuestionInput[]).map((q, i) => ({
               position: i + 1,
@@ -3172,6 +3484,7 @@ export function registerTestsCommand(program: Command): void {
               'Branching requires a Helio Enterprise account. Validation cannot see your plan, so this may still fail with a 400 on create.',
             );
           }
+          warnings.push(...excludeTestWarnings(cmdOpts.excludeTests));
           // Metrics that create fine and measure nothing. `tests validate`
           // refuses to pass these, so surfacing them here saves a round trip.
           warnings.push(...uxMetricWarnings(uxMetrics ?? []));
@@ -3191,6 +3504,9 @@ export function registerTestsCommand(program: Command): void {
             }
             if (demographics !== undefined) {
               console.log(`  Demographics:  ${Object.keys(demographics as Record<string, unknown>).join(', ')}`);
+            }
+            if (cmdOpts.excludeTests) {
+              console.log(`  Excludes:      ${(cmdOpts.excludeTests as string[]).join(', ')}`);
             }
             console.log(`  Questions:     ${questionCount}`);
             if (uxMetricTypeNames.length > 0) {
@@ -3248,14 +3564,18 @@ export function registerTestsCommand(program: Command): void {
         if (cmdOpts.uxMetricContext) body.ux_metric_context = cmdOpts.uxMetricContext;
         if (cmdOpts.audiences) body.audiences = cmdOpts.audiences;
         if (demographics !== undefined) body.demographics = demographics;
+        if (cmdOpts.excludeTests) body.exclude_test_ids = cmdOpts.excludeTests;
 
         const data = await client.post('tests', body);
-        const metricWarnings = uxMetricWarnings(uxMetrics ?? []);
+        const createWarnings = [
+          ...excludeTestWarnings(cmdOpts.excludeTests),
+          ...uxMetricWarnings(uxMetrics ?? []),
+        ];
         if (isJsonMode()) {
-          printJson(metricWarnings.length ? { ...(data as object), warnings: metricWarnings } : data);
+          printJson(createWarnings.length ? { ...(data as object), warnings: createWarnings } : data);
         } else {
           printKeyValue(data as Record<string, unknown>);
-          for (const w of metricWarnings) {
+          for (const w of createWarnings) {
             console.log(`\n  \x1b[33m⚠\x1b[0m ${w}`);
           }
         }
@@ -3268,6 +3588,10 @@ export function registerTestsCommand(program: Command): void {
     .requiredOption('--type <type>', 'Question type: free_response, multiple_choice, likert, nps, ranking, preference, matrix, card_sort, point_allocation, max_diff, click_test')
     .requiredOption('--instructions <text>', 'Question text')
     .option('--choices <items...>', 'Choices (for multiple_choice, ranking, preference, matrix, card_sort, point_allocation, max_diff)')
+    .option(
+      '--variations <json>',
+      'Preference options as a JSON array or @path/to/file.json — the form that carries an image per option: [{"name": "Data In", "asset_id": 61016, "site_link": "https://example.com"}]. Plain strings work too, and the forms can be mixed. Preference only; mutually exclusive with --choices.',
+    )
     .option('--scale-type <scale>', 'Scale type (for likert)')
     .option('--custom-choices <items...>', 'Custom scale labels (for likert with scale_type=custom)')
     .option('--allow-multiple', 'Allow multiple selections (for multiple_choice)')
@@ -3293,6 +3617,7 @@ export function registerTestsCommand(program: Command): void {
           instructions: cmdOpts.instructions,
         };
         if (cmdOpts.choices) question.choices = cmdOpts.choices;
+        if (cmdOpts.variations) question.variations = parseJsonArrayFlag(cmdOpts.variations, '--variations');
         if (cmdOpts.scaleType) question.scale_type = cmdOpts.scaleType;
         if (cmdOpts.customChoices) question.custom_choices = cmdOpts.customChoices;
         if (cmdOpts.allowMultiple) question.allow_multiple = true;
@@ -3354,6 +3679,10 @@ export function registerTestsCommand(program: Command): void {
     .option('--type <type>', 'Question type (required for regular questions, omit for UX metric sections)')
     .option('--instructions <text>', 'Question text')
     .option('--choices <items...>', 'Choices')
+    .option(
+      '--variations <json>',
+      'Preference options as a JSON array or @path/to/file.json — the form that carries an image per option: [{"name": "Data In", "asset_id": 61016, "site_link": "https://example.com"}]. Plain strings work too, and the forms can be mixed. Preference only; mutually exclusive with --choices.',
+    )
     .option('--scale-type <scale>', 'Scale type (for likert)')
     .option('--custom-choices <items...>', 'Custom scale labels')
     .option('--allow-multiple', 'Allow multiple selections')
@@ -3386,6 +3715,7 @@ export function registerTestsCommand(program: Command): void {
         if (cmdOpts.type) question.type = cmdOpts.type;
         if (cmdOpts.instructions) question.instructions = cmdOpts.instructions;
         if (cmdOpts.choices) question.choices = cmdOpts.choices;
+        if (cmdOpts.variations) question.variations = parseJsonArrayFlag(cmdOpts.variations, '--variations');
         if (cmdOpts.scaleType) question.scale_type = cmdOpts.scaleType;
         if (cmdOpts.customChoices) question.custom_choices = cmdOpts.customChoices;
         if (cmdOpts.allowMultiple) question.allow_multiple = true;
@@ -3439,6 +3769,9 @@ export function registerTestsCommand(program: Command): void {
         } else {
           // UX metric section edit — reject structural flags
           const structuralFlags: [string, string][] = [
+            // No UX metric emits a preference section, so --variations here is
+            // always aimed at the wrong kind of section.
+            ['variations', '--variations'],
             ['scale_type', '--scale-type'],
             ['custom_choices', '--custom-choices'],
             ['allow_multiple', '--allow-multiple'],
@@ -3767,6 +4100,11 @@ export function registerTestsCommand(program: Command): void {
       '--demographics <json>',
       'Demographic filters as JSON object or @file (required for targeted, optional for advanced; needs --audience-type). Keys: gender, age, income, education, continent, country.',
     )
+    .option(
+      '--exclude-tests <ids...>',
+      'Replace the exclusion list wholesale with these test ids (panel audiences only; max 5, or 30 on internal_group accounts). Unlike --audiences this does not need --audience-type — without one it applies to the audience the test already has.',
+    )
+    .option('--clear-exclude-tests', 'Clear the exclusion list. Always allowed, whatever the audience type or account.')
     .action(
       withErrorHandling(async (id: string, cmdOpts) => {
         const client = makeClient(program);
@@ -3775,14 +4113,22 @@ export function registerTestsCommand(program: Command): void {
         if (cmdOpts.intro) body.intro = cmdOpts.intro;
         if (cmdOpts.targetAudienceSize) body.target_audience_size = parsePositiveInt(cmdOpts.targetAudienceSize, '--target-audience-size');
 
+        if (cmdOpts.excludeTests && cmdOpts.clearExcludeTests) {
+          throw new Error('Use either --exclude-tests or --clear-exclude-tests, not both.');
+        }
+
         // The audience is replaced wholesale, so the type anchors the change —
         // the API 400s on audiences/demographics without it, and so do we.
+        // Exclusions are the exception: PATCH applies them to whatever quota
+        // the test has, so they stand alone.
         const demographics = cmdOpts.demographics ? parseJsonOrFile(cmdOpts.demographics) : undefined;
         if (cmdOpts.audienceType) {
           const audienceErrors = validateAudienceConfig({
             audienceType: cmdOpts.audienceType,
             audiences: cmdOpts.audiences,
             demographics,
+            excludeTestIds: cmdOpts.excludeTests,
+            testId: id,
           });
           if (audienceErrors.length > 0) {
             throw new Error(audienceErrors.join('\n'));
@@ -3794,17 +4140,29 @@ export function registerTestsCommand(program: Command): void {
           throw new Error(
             '--audiences and --demographics replace the audience and require --audience-type to say what kind it becomes.',
           );
+        } else if (cmdOpts.excludeTests) {
+          // No type in this request, so the panel-only gate isn't checkable
+          // here — the server applies it against the existing quota.
+          const excludeErrors = validateExcludeTestIds({ excludeTestIds: cmdOpts.excludeTests, testId: id });
+          if (excludeErrors.length > 0) {
+            throw new Error(excludeErrors.join('\n'));
+          }
         }
+
+        // Clearing is exempt from every gate upstream, so [] is always safe.
+        if (cmdOpts.clearExcludeTests) body.exclude_test_ids = [];
+        else if (cmdOpts.excludeTests) body.exclude_test_ids = cmdOpts.excludeTests;
 
         if (Object.keys(body).length === 0) {
           throw new Error(
-            'At least one field is required: --name, --intro, --target-audience-size, or --audience-type',
+            'At least one field is required: --name, --intro, --target-audience-size, --audience-type, --exclude-tests, or --clear-exclude-tests',
           );
         }
 
         const data = await client.patch(`tests/${id}`, body);
+        const warnings = excludeTestWarnings(cmdOpts.excludeTests);
         if (isJsonMode()) {
-          printJson(data);
+          printJson(warnings.length ? { ...(data as object), warnings } : data);
         } else {
           // The response echoes the audience summary — print it as
           // confirmation of what the quota actually became.
@@ -3816,6 +4174,9 @@ export function registerTestsCommand(program: Command): void {
           if (audience) {
             console.log();
             printAudience(audience);
+          }
+          for (const w of warnings) {
+            console.log(`  \x1b[33m⚠\x1b[0m ${w}`);
           }
         }
       }),

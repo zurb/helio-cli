@@ -1,5 +1,72 @@
 # Changelog
 
+## 0.9.0
+
+Ships against the 2026-08-23 Public API release (preference variation images +
+writable audience exclusions). The new flags 400 against an older API; nothing
+that worked in 0.8.1 stops working against the new one.
+
+### Breaking (JSON output shape)
+- **`tests preview --output json` emits `variations` instead of `choices` for a
+  preference question.** A preference question's options are
+  `PreferenceVariation` records — one full-size image each — not `Choice`
+  records, so the old `choices` key was always an empty array on these
+  questions. Each entry is now `{name, asset_id, has_asset, site_link}`, which
+  is also the key a write takes, so preview output can be fed straight back
+  into `create` / `add-question`. Every other question type keeps `choices`
+  unchanged.
+- **`tests walkthrough --output json` gains a `preference_options` key** on
+  every question screen (`null` on all non-preference types).
+
+### Added
+- **Preference options are `variations`, and can carry an image.** New
+  `--variations <json|@file>` on `tests add-question` and `tests edit-question`
+  takes the options as plain strings, as objects
+  `{name (or text), asset_id?, site_link?}`, or a mix of both — the form that
+  fills each option's image slot. Previously the CLI could only send option
+  names, so every variation came back `asset_id: null` and the test could never
+  clear its "Add an image" launch blocker. `--choices` still works on a
+  preference question as a legacy alias; passing both is rejected locally, and
+  errors are named for whichever key you actually used
+  (`variations[0]` / `choices[0]`).
+  - `variations` on any other question type is rejected with a pointer to
+    `choices`, rather than being silently dropped.
+  - A parallel `asset_ids` array — which the API used to accept with a 200 and
+    ignore — is now rejected by name, pointing at per-variation `asset_id`.
+  - An option mirrored back out of a `GET` gets one error listing its read-only
+    keys, rather than one error per key.
+- **`--exclude-tests <ids...>` on `tests create` and `tests update`** keeps
+  anyone who took the named tests out of this one, so a set of monadic cells
+  never shares participants. `tests update --clear-exclude-tests` clears the
+  list. Unlike `--audiences`, `--exclude-tests` does not need
+  `--audience-type` on update: without one it applies to the audience the test
+  already has. Previously `exclude_test_ids` was readable but not writable, so
+  a run of mutually exclusive tests had to be wired up by hand in the editor.
+  - The panel-audiences-only rule is checked locally (and by `--dry-run`)
+    whenever the same command sets `--audience-type`, as are duplicate ids and
+    a test excluding itself.
+  - The two account-shaped gates — the `beta_group` flag and the cap of 5 (30
+    on `internal_group` accounts) — come back as warnings, not errors: the CLI
+    cannot see your account and must not block one that has the entitlement.
+    This matches how the Enterprise branching gate is surfaced.
+  - `--clear-exclude-tests` is exempt from every gate, so a test can always be
+    undone.
+
+### Changed
+- **`tests preview` and `tests walkthrough` render preference options at all.**
+  Both read options off `variations[0].choices`, which is empty on a preference
+  question — so a preference question used to preview with no options
+  whatsoever. Both now list the options and flag any that have no image, since
+  an empty image slot is a launch blocker that the participant view gives no
+  hint of.
+- **`tests preview` lists the excluded test ids** under the audience block
+  instead of only counting them — they are what `--exclude-tests` takes back,
+  so the block is now a round-trip.
+- **`tests question-types --type <type>` prints the type's `notes` in text
+  mode.** JSON consumers always saw them; text mode dropped them, hiding rules
+  that live nowhere else (preference's `variations`/`choices` aliasing,
+  click_test's hotspot semantics).
+
 ## 0.8.1
 
 ### Added
