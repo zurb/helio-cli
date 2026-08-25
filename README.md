@@ -144,6 +144,12 @@ helio-cli tests add-question <test-uuid> \
     --type likert --instructions "How important is same-day delivery to you?" \
     --scale-type importance
 
+# A preference question's options are variations — one full-size image each
+helio-cli tests add-question <test-uuid> \
+    --type preference --instructions "Which do you prefer?" \
+    --variations '[{"name":"Data In","asset_id":61016},
+                   {"name":"The Vertical","asset_id":61017}]'
+
 # Preview and launch
 helio-cli tests preview <test-uuid>
 helio-cli tests send <test-uuid>
@@ -193,6 +199,26 @@ Uploads return immediately with `status: "processing"`; poll `assets get <asset-
 `free_response`, `multiple_choice`, `likert`, `nps`, `ranking`, `preference`, `matrix`, `card_sort`, `point_allocation`, `max_diff`
 
 PascalCase variants also accepted (e.g., `FreeResponse`, `MultipleChoice`).
+
+**`preference` is the one type whose options are not `choices`.** They are
+*variations* — one full-size image each — which is why `GET /tests/:id` has
+always read them back under `variations`, and since the 2026-08-23 API release
+that is the key writes take too. Each option is a plain string or an object
+`{name (or text), asset_id?, site_link?}`, and the two forms can be mixed:
+
+```jsonc
+{ "type": "preference", "instructions": "Which do you prefer?", "variations": [
+    { "name": "Data In",      "asset_id": 61016 },
+    { "name": "The Vertical", "asset_id": 61017, "site_link": "https://example.com" }
+]}
+```
+
+`asset_id` must be an **image** asset on the test's own account (`assets
+upload`). An option with no image still saves as a draft, but leaves an empty
+image slot that `tests validate` reports as a launch blocker — `preview` and
+`walkthrough` both flag it. `choices` still works on a preference question as a
+legacy alias, so existing scripts keep running; passing both is an error, and
+`variations` on any other question type is rejected with a pointer to `choices`.
 
 Likert scales: `agreement`, `occurrence`, `importance`, `quality`, `comprehension`, `impression`, `expectations`, `usefulness`, `difficulty`, `likelihood`, `custom`
 
@@ -386,9 +412,25 @@ helio-cli tests create ... --audience-type customer_list --audiences <list-id>
 helio-cli tests clone <test-uuid>
 helio-cli tests update <new-uuid> --audience-type targeted \
     --demographics '{"education":["Bachelor degree"]}'
+
+# Keep tests from sharing participants (monadic cells, iteration vs. baseline)
+helio-cli tests create ... --audience-type basic \
+    --exclude-tests <cell-a-uuid> <cell-b-uuid>
+helio-cli tests update <test-uuid> --exclude-tests <other-uuid>
+helio-cli tests update <test-uuid> --clear-exclude-tests
 ```
 
 `--demographics` keys: `gender`, `age`, `income`, `education`, `continent`, `country` — values are string arrays. Required for `targeted`, optional for `advanced`, rejected elsewhere. `--audiences` is required for `advanced`/`customer_list` and rejected for the other types — including `open`, where the server would silently ignore it (the old trap: a test that looks fine and recruits nobody). On `tests update`, `--audience-type` replaces the pending quota wholesale; size carries over unless `--target-audience-size` is passed too. Audience changes are draft-only (running tests 422). Enroll rows in `audiences list` show `—` for participants/tests/last-used — a panel segment has no usage history in your account.
+
+#### Exclusions — keeping tests from sharing participants
+
+`--exclude-tests <ids...>` keeps anyone who took the named tests out of this one, which is what a set of monadic cells or an iteration measured against its own baseline needs. Values are test uuids on your own account (a `report_uuid` also resolves); an unknown or foreign id is a 404 that writes nothing.
+
+**Exclusion is symmetric** — a test also excludes anyone who took a test naming *it* — so a mutually exclusive set of N tests needs **one entry per pair**, not N-1 entries per test. For four cells A/B/C/D, that means naming later cells from earlier ones rather than cross-listing all four.
+
+The API applies the same three gates the editor does, so the CLI can't build a test the editor then can't show: panel audiences only (`basic`, `targeted`, `advanced` — never an open link or customer list), at most 5 per test (30 on `internal_group` accounts), and the account needs the exclusions beta flag. Only the panel rule is checkable locally, and only when the same command sets `--audience-type`; the cap and the account flag come back as warnings, since the CLI can't see your account and shouldn't block an account that does have the entitlement.
+
+On `tests update`, `--exclude-tests` replaces the list wholesale and — unlike `--audiences` — does **not** need `--audience-type`: without one it applies to the audience the test already has. `--clear-exclude-tests` sends an empty list, which is exempt from all three gates, so a test can always be undone.
 
 ## Command Aliases
 

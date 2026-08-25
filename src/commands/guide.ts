@@ -209,6 +209,19 @@ const GUIDE = `
         --type point_allocation --instructions "Distribute 100 points" \\
         --choices "Speed" "Design" "Price" --points 100
 
+  A preference question is the exception: its options are \x1b[1mvariations\x1b[0m,
+  one full-size image each, so they take --variations rather than --choices:
+    $ helio-cli assets upload ./data-in.png      # note the returned asset id
+    $ helio-cli tests add-question <test-uuid> \\
+        --type preference --instructions "Which do you prefer?" \\
+        --variations '[{"name":"Data In","asset_id":61016},
+                       {"name":"The Vertical","asset_id":61017}]'
+
+    Plain strings still work ('["A","B"]') and the two forms can be mixed, but
+    an option with no asset_id has an empty image slot — the draft saves and
+    \x1b[1mtests validate\x1b[0m reports it as a launch blocker. --choices is
+    still accepted as a legacy alias; passing both is an error.
+
   Edit or remove questions on a draft:
     $ helio-cli tests edit-question <test-uuid> <section-uuid> \\
         --type free_response --instructions "Updated question text"
@@ -275,6 +288,21 @@ const GUIDE = `
 
     Demographics keys: gender, age, income, education, continent, country —
     values are string arrays. Required for targeted, optional for advanced.
+
+  Keep two tests from sharing participants (a four-cell monadic study, an
+  iteration against its own baseline):
+    $ helio-cli tests create ... --audience-type basic \\
+        --exclude-tests <cell-a-uuid> <cell-b-uuid>
+    $ helio-cli tests update <test-uuid> --exclude-tests <other-uuid>
+    $ helio-cli tests update <test-uuid> --clear-exclude-tests
+
+    Exclusion is \x1b[1msymmetric\x1b[0m — a test also excludes anyone who took
+    a test naming \x1b[1mit\x1b[0m — so a mutually exclusive set of N tests
+    needs one entry per pair, not N-1 entries per test. Panel audiences only
+    (basic, targeted, advanced), max 5 per test, and the account needs the
+    exclusions beta flag; --clear-exclude-tests is exempt from all of it, so a
+    test can always be undone. Unlike --audiences, --exclude-tests does not
+    need --audience-type: without one it applies to the audience already there.
 
   Or retarget an existing draft (the clone-then-retarget flow):
     $ helio-cli tests clone <test-uuid>
@@ -458,6 +486,8 @@ export const GUIDE_JSON = {
       get: { description: 'Get test details', args: '<id>' },
       preview: {
         description: 'Human-readable summary of a test with questions, choices, and results',
+        preference_note:
+          "A preference question's options come back under `variations` (each {name, asset_id, has_asset, site_link}), not `choices` — that is what they are and what a write takes, so preview output feeds straight back into create/add-question. Options with no image are flagged as launch blockers.",
         args: '<id>',
         note: 'Use this to verify a test looks correct before launching.',
       },
@@ -467,7 +497,7 @@ export const GUIDE_JSON = {
         options: {
           '--interactive': 'Prompt one screen at a time, capture answers, print recap (TTY required). Type "back" / "quit" to navigate.',
         },
-        note: 'Complements preview: preview is a flat structural summary, walkthrough renders each participant screen separately (intro + per-question UI). Stimulus assets are shared per screen: signed image URLs print inline (🖼) and each screen carries assets: [{variation_id, variation_name, asset_id, type, status, url, thumb_url}] plus site_link in JSON output (status "processing" means the upload is attached but not yet visible to participants). Asset-heavy types (prototype_task, click_test, tree_test) still render a placeholder pointing to the Helio browser preview, but include their asset URLs. With --output json, emits { test, screens: [...] }.',
+        note: 'Complements preview: preview is a flat structural summary, walkthrough renders each participant screen separately (intro + per-question UI). Stimulus assets are shared per screen: signed image URLs print inline (🖼) and each screen carries assets: [{variation_id, variation_name, asset_id, type, status, url, thumb_url}] plus site_link in JSON output (status "processing" means the upload is attached but not yet visible to participants). Asset-heavy types (prototype_task, click_test, tree_test) still render a placeholder pointing to the Helio browser preview, but include their asset URLs. With --output json, emits { test, screens: [...] }. Preference screens also carry preference_options: [{name, asset_id, has_asset, site_link}] (null on every other type) — has_asset false means an empty image slot, which is a launch blocker, and both the rendered screen and the JSON say so.',
       },
       participants: {
         description: "Per-respondent journeys — each person's answers stitched together in order, with the follow-up why and its sentiment attached to each rating",
@@ -487,7 +517,7 @@ export const GUIDE_JSON = {
         one_of_required: ['--ux-metrics <types...>', '--ux-metrics-json <json>', '--questions <json>'],
         recommended_shape: 'Lead with --ux-metrics (scored, validated sections) and use --questions only for what no metric covers. See ux_metrics.why_metrics_first and ux_metrics.starting_stacks.',
         project: 'Provide either --project-id <uuid> or --project-name <name> (resolved to UUID)',
-        optional: ['--audience-type <type> (default: open)', '--audiences <ids...>', '--demographics <json>', '--ux-metrics <types...>', '--ux-metrics-json <json>', '--ux-metric-context <text>', '--dry-run'],
+        optional: ['--audience-type <type> (default: open)', '--audiences <ids...>', '--demographics <json>', '--exclude-tests <ids...>', '--ux-metrics <types...>', '--ux-metrics-json <json>', '--ux-metric-context <text>', '--dry-run'],
         audience_types: {
           open: 'Share-link recruiting; --audiences and --demographics are not accepted',
           basic: 'Helio panel, no filters',
@@ -495,6 +525,7 @@ export const GUIDE_JSON = {
           advanced: 'Saved panel segments via --audiences (required; ids from `audiences list --source enroll`); --demographics optional',
           customer_list: 'Your customer lists via --audiences (required; ids from `audiences list`)',
         },
+        exclude_tests_note: '--exclude-tests <ids...> keeps anyone who took those tests out of this one, so a set of cells never shares participants. Values are test uuids (a report_uuid also resolves) on your own account. Panel audiences only (basic, targeted, advanced), at most 5 per test (30 on internal_group accounts), and the account needs the exclusions beta flag — the CLI checks the panel rule locally and warns about the other two, which only the server can see. Exclusion is SYMMETRIC (a test also excludes anyone who took a test naming it), so a mutually exclusive set of N tests needs one entry per pair, not N-1 entries per test.',
         dry_run: 'Validates questions, ux-metrics and the audience config locally and shows estimated answer spend without creating the test.',
         questions_format: 'JSON array or @path/to/file.json',
         ux_metrics_note: 'Auto-generates standardized measurement questions that return a 0-100 score with a threshold label. Can be used with or without --questions; prefer a metric over hand-writing its lookalike.',
@@ -537,6 +568,7 @@ export const GUIDE_JSON = {
         required: ['--type <type>', '--instructions <text>'],
         options: {
           '--position <n>': 'Insert at this 1-based position (appends if omitted; later questions shift down)',
+          '--variations <json>': 'Preference options as a JSON array or @file, the form that carries an image per option: [{"name":"Data In","asset_id":61016,"site_link":"..."}]. Preference only; mutually exclusive with --choices.',
           '--followup <text>': 'Attach a follow-up question',
           '--followup-required': 'Mark the follow-up as required (needs --followup)',
           '--followup-for-choices <positions...>': '0-based choice positions that trigger the follow-up (multiple choice / likert only; needs --followup)',
@@ -547,7 +579,7 @@ export const GUIDE_JSON = {
           nps: [],
           free_response: [],
           ranking: ['--choices <items...> (min 3)'],
-          preference: ['--choices <items...> (min 2)'],
+          preference: ['--variations <json> (min 2; the image-carrying form)', '--choices <items...> (min 2, legacy alias; names only, no images)'],
           matrix: ['--choices <items...> (min 1, row labels)', '--categories <items...> (min 2, column labels)'],
           card_sort: ['--choices <items...> (min 2, cards)', '--categories <items...> (min 2)', '--random-category-order', '--can-skip-cards'],
           point_allocation: ['--choices <items...> (min 2)', '--points <n>', '--points-label <label>'],
@@ -581,7 +613,7 @@ export const GUIDE_JSON = {
           nps: [],
           free_response: ['--asset-id <id>', '--site-link <url>'],
           ranking: ['--choices <items...> (min 3)'],
-          preference: ['--choices <items...> (min 2)'],
+          preference: ['--variations <json> (min 2; the image-carrying form)', '--choices <items...> (min 2, legacy alias; names only, no images)'],
           matrix: ['--choices <items...> (min 1, row labels)', '--categories <items...> (min 2, column labels)'],
           card_sort: ['--choices <items...> (min 2, cards)', '--categories <items...> (min 2)', '--random-category-order', '--can-skip-cards'],
           point_allocation: ['--choices <items...> (min 2)', '--points <n>', '--points-label <label>'],
@@ -602,8 +634,9 @@ export const GUIDE_JSON = {
       update: {
         description: 'Update a draft test, or replace its audience (clone-then-retarget flow)',
         args: '<id>',
-        optional: ['--name <name>', '--intro <text>', '--target-audience-size <n>', '--audience-type <type>', '--audiences <ids...>', '--demographics <json>'],
+        optional: ['--name <name>', '--intro <text>', '--target-audience-size <n>', '--audience-type <type>', '--audiences <ids...>', '--demographics <json>', '--exclude-tests <ids...>', '--clear-exclude-tests'],
         audience_note: '--audience-type replaces the pending quota wholesale (size carries over unless --target-audience-size is also passed); --audiences/--demographics require it. Same audience type vocabulary as create. Non-draft tests 422.',
+        exclude_tests_note: '--exclude-tests replaces the exclusion list wholesale and, unlike --audiences, does NOT need --audience-type — without one it applies to the audience the test already has (so the panel-only rule is checked by the server, not the CLI). --clear-exclude-tests sends [], which is exempt from every gate, so a test can always be undone. Same cap and symmetry rules as create.',
       },
       responses: { description: 'Get all responses', args: '<id>' },
       report: {
@@ -715,7 +748,16 @@ export const GUIDE_JSON = {
       },
       nps: { also_accepts: 'NPS', required: ['type', 'instructions'] },
       ranking: { also_accepts: 'Ranking', required: ['type', 'instructions', 'choices (min 3)'] },
-      preference: { also_accepts: 'Preference', required: ['type', 'instructions', 'choices (min 2)'] },
+      preference: {
+        also_accepts: 'Preference',
+        required: ['type', 'instructions', 'variations (min 2)'],
+        variations_note:
+          "A preference question's options are variations — one full-size image each — not choices. Each is a name string or {name (or text), asset_id?, site_link?}, and the forms can be mixed. asset_id must be an IMAGE asset on the test's own account. `choices` is a legacy alias; passing both is a 400. `variations` on any other type is a 400 pointing at choices.",
+        image_note:
+          'An option with no asset_id is a valid draft but leaves an empty image slot; `tests validate` reports it as a launch blocker. There is no parallel asset_ids array — a section-level asset_id sets a stimulus above the question, not the option slots.',
+        example:
+          '[{"type":"preference","instructions":"Which do you prefer?","variations":[{"name":"Data In","asset_id":61016},{"name":"The Vertical","asset_id":61017,"site_link":"https://example.com"}]}]',
+      },
       matrix: { also_accepts: 'Matrix', required: ['type', 'instructions', 'choices (min 1)', 'categories (min 2)'] },
       card_sort: { also_accepts: 'CardSort', required: ['type', 'instructions', 'choices (min 2)', 'categories (min 2)'], optional: ['random_category_order', 'can_skip_cards'] },
       point_allocation: { also_accepts: 'PointAllocation', required: ['type', 'instructions', 'choices (min 2)'], optional: ['points', 'points_label'] },

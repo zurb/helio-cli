@@ -144,9 +144,10 @@ describe('validateQuestions — likert', () => {
 });
 
 describe('validateQuestions — choice-count minimums', () => {
+  // preference is deliberately absent: its options are variations, not
+  // choices, and it gets its own block below.
   it.each([
     ['ranking', 3],
-    ['preference', 2],
     ['point_allocation', 2],
     ['max_diff', 4],
   ] as Array<[string, number]>)('%s requires at least %i choices', (type, min) => {
@@ -154,6 +155,112 @@ describe('validateQuestions — choice-count minimums', () => {
     const exact = Array.from({ length: min }, (_, i) => `C${i}`);
     expect(validateQuestions(q({ type, choices: under }))[0].field).toBe('choices');
     expect(validateQuestions(q({ type, choices: exact }))).toEqual([]);
+  });
+});
+
+// ─── preference variations ───────────────────────────────────────────────────
+// The 2026-08-23 API contract: a preference question's options are
+// PreferenceVariation records — one image each — written under `variations`,
+// which is also the key GET /tests/:id has always read them back as. `choices`
+// survives as a legacy alias; passing both is a 400; `variations` on any other
+// type is a 400 pointing back at `choices`.
+
+describe('validateQuestions — preference variations', () => {
+  const pref = (overrides: Record<string, unknown>) => q({ type: 'preference', ...overrides });
+
+  it('accepts plain strings, option objects, and the two mixed', () => {
+    expect(validateQuestions(pref({ variations: ['A', 'B'] }))).toEqual([]);
+    expect(
+      validateQuestions(
+        pref({
+          variations: [
+            { name: 'Data In', asset_id: 61016 },
+            { name: 'The Vertical', asset_id: 61017, site_link: 'https://example.com' },
+          ],
+        }),
+      ),
+    ).toEqual([]);
+    expect(validateQuestions(pref({ variations: ['A', { text: 'B', asset_id: '61017' }] }))).toEqual([]);
+  });
+
+  it('still accepts choices as the legacy alias', () => {
+    expect(validateQuestions(pref({ choices: ['A', 'B'] }))).toEqual([]);
+    expect(validateQuestions(pref({ choices: [{ name: 'A', asset_id: 1 }, 'B'] }))).toEqual([]);
+  });
+
+  it('rejects both keys at once, the way the API does', () => {
+    const errors = validateQuestions(pref({ variations: ['A', 'B'], choices: ['A', 'B'] }));
+    expect(fields(errors)).toEqual(['variations']);
+    expect(errors[0].message).toMatch(/not both/);
+  });
+
+  it('requires at least 2 options under either key, naming the key in the payload', () => {
+    expect(validateQuestions(pref({ variations: ['Only'] }))[0].field).toBe('variations');
+    expect(validateQuestions(pref({ choices: ['Only'] }))[0].field).toBe('choices');
+    // Neither key supplied: point at the canonical one.
+    expect(validateQuestions(pref({}))[0].field).toBe('variations');
+    expect(validateQuestions(pref({ variations: 'A,B' }))[0].field).toBe('variations');
+  });
+
+  it('names errors for whichever key the caller used', () => {
+    expect(validateQuestions(pref({ variations: ['A', ' '] }))[0].field).toBe('variations[1]');
+    expect(validateQuestions(pref({ choices: ['A', ' '] }))[0].field).toBe('choices[1]');
+  });
+
+  it('requires a name on an option object', () => {
+    const errors = validateQuestions(pref({ variations: [{ asset_id: 1 }, 'B'] }));
+    expect(fields(errors)).toEqual(['variations[0]']);
+    expect(errors[0].message).toMatch(/name/);
+  });
+
+  it('rejects an asset_id that could not be one', () => {
+    expect(fields(validateQuestions(pref({ variations: [{ name: 'A', asset_id: '' }, 'B'] })))).toEqual([
+      'variations[0].asset_id',
+    ]);
+    expect(fields(validateQuestions(pref({ variations: [{ name: 'A', asset_id: 0 }, 'B'] })))).toEqual([
+      'variations[0].asset_id',
+    ]);
+    expect(fields(validateQuestions(pref({ variations: [{ name: 'A', asset_id: {} }, 'B'] })))).toEqual([
+      'variations[0].asset_id',
+    ]);
+  });
+
+  it('rejects a non-string site_link', () => {
+    expect(fields(validateQuestions(pref({ variations: [{ name: 'A', site_link: 5 }, 'B'] })))).toEqual([
+      'variations[0].site_link',
+    ]);
+  });
+
+  it('rejects an option that is neither a string nor an object', () => {
+    const errors = validateQuestions(pref({ variations: [5, 'B'] }));
+    expect(fields(errors)).toEqual(['variations[0]']);
+    expect(errors[0].message).toMatch(/name string or an object/);
+  });
+
+  it('collapses a GET-mirrored option into one error naming its read-only keys', () => {
+    const errors = validateQuestions(
+      pref({
+        variations: [
+          { id: '9', name: 'A', type: 'PreferenceVariation', choices: [], has_asset: true, thumb_url: 'x' },
+          'B',
+        ],
+      }),
+    );
+    expect(fields(errors)).toEqual(['variations[0]']);
+    expect(errors[0].message).toMatch(/id, type, choices, has_asset, thumb_url/);
+  });
+
+  it('rejects the parallel asset_ids array that used to be silently ignored', () => {
+    const errors = validateQuestions(pref({ variations: ['A', 'B'], asset_ids: [1, 2] }));
+    expect(fields(errors)).toEqual(['asset_ids']);
+    expect(errors[0].message).toMatch(/asset_id on each variation/);
+  });
+
+  it('rejects variations on any other question type and points at choices', () => {
+    const errors = validateQuestions(q({ type: 'ranking', choices: ['A', 'B', 'C'], variations: ['A', 'B'] }));
+    expect(fields(errors)).toEqual(['variations']);
+    expect(errors[0].message).toMatch(/preference-only/);
+    expect(errors[0].message).toMatch(/choices/);
   });
 });
 

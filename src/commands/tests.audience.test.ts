@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { validateAudienceConfig, enrichSendError } from './tests.js';
+import {
+  validateAudienceConfig,
+  validateExcludeTestIds,
+  excludeTestWarnings,
+  enrichSendError,
+} from './tests.js';
 import { HelioApiError } from '../types.js';
 
 // ─── validateAudienceConfig ──────────────────────────────────────────────────
@@ -139,6 +144,93 @@ describe('validateAudienceConfig — demographics', () => {
     });
     // missing audiences + unknown key + bad value = three actionable errors
     expect(errors.length).toBeGreaterThanOrEqual(3);
+  });
+});
+
+// ─── validateExcludeTestIds ──────────────────────────────────────────────────
+// The 2026-08-23 API contract: exclude_test_ids is writable on create and
+// update. The API gates it three ways — the account's beta_group flag, panel
+// audiences only, and a cap of 5 (30 for internal_group). Only the panel gate
+// is visible locally, and only when the same request sets the audience type;
+// the account-shaped gates are warnings, not errors, so an account that DOES
+// have the entitlement is never falsely blocked.
+
+describe('validateExcludeTestIds', () => {
+  it('accepts a well-formed list on every panel audience type', () => {
+    for (const audienceType of ['basic', 'targeted', 'advanced']) {
+      expect(validateExcludeTestIds({ excludeTestIds: ['01J8TESTA', '01J8TESTB'], audienceType })).toEqual([]);
+    }
+  });
+
+  it('is a no-op when nothing is excluded', () => {
+    expect(validateExcludeTestIds({})).toEqual([]);
+    expect(validateExcludeTestIds({ excludeTestIds: [] })).toEqual([]);
+    // Clearing is exempt from every gate upstream, so an empty list never
+    // trips the panel-only rule either.
+    expect(validateExcludeTestIds({ excludeTestIds: [], audienceType: 'open' })).toEqual([]);
+  });
+
+  it('rejects exclusions on the two non-panel audience types', () => {
+    for (const audienceType of ['open', 'customer_list']) {
+      const errors = validateExcludeTestIds({ excludeTestIds: ['01J8TESTA'], audienceType });
+      expect(errors.join(' ')).toMatch(/panel audiences only/);
+      expect(errors.join(' ')).toMatch(/basic, targeted, advanced/);
+    }
+  });
+
+  it('skips the panel gate when the request does not set the type', () => {
+    // `tests update --exclude-tests` alone keeps whatever quota the test has,
+    // so the server is the only thing that can judge this.
+    expect(validateExcludeTestIds({ excludeTestIds: ['01J8TESTA'] })).toEqual([]);
+  });
+
+  it('rejects empty and non-string ids by position', () => {
+    const errors = validateExcludeTestIds({ excludeTestIds: ['01J8TESTA', ' ', 7 as unknown as string] });
+    expect(errors).toHaveLength(2);
+    expect(errors[0]).toMatch(/\[1\]/);
+    expect(errors[1]).toMatch(/\[2\]/);
+  });
+
+  it('rejects a duplicated id', () => {
+    const errors = validateExcludeTestIds({ excludeTestIds: ['01J8TESTA', '01J8TESTB', '01J8TESTA'] });
+    expect(errors.join(' ')).toMatch(/more than once/);
+    expect(errors.join(' ')).toMatch(/01J8TESTA/);
+  });
+
+  it('rejects a test excluding itself', () => {
+    const errors = validateExcludeTestIds({ excludeTestIds: ['01J8SELF'], testId: '01J8SELF' });
+    expect(errors.join(' ')).toMatch(/itself/);
+    expect(errors.join(' ')).toMatch(/01J8SELF/);
+  });
+
+  it('is reached through validateAudienceConfig so --dry-run catches it', () => {
+    const errors = validateAudienceConfig({
+      audienceType: 'open',
+      excludeTestIds: ['01J8TESTA'],
+    });
+    expect(errors.join(' ')).toMatch(/panel audiences only/);
+  });
+});
+
+describe('excludeTestWarnings', () => {
+  it('says nothing when nothing is excluded', () => {
+    expect(excludeTestWarnings()).toEqual([]);
+    expect(excludeTestWarnings([])).toEqual([]);
+  });
+
+  it('always flags the account-level beta_group gate', () => {
+    const warnings = excludeTestWarnings(['01J8TESTA']);
+    expect(warnings.join(' ')).toMatch(/beta_group/);
+    expect(warnings.join(' ')).toMatch(/400/);
+  });
+
+  it('warns past the cap instead of blocking an internal_group account', () => {
+    const six = Array.from({ length: 6 }, (_, i) => `01J8TEST${i}`);
+    // Never an error: the CLI cannot see whether the account gets 30.
+    expect(validateExcludeTestIds({ excludeTestIds: six, audienceType: 'basic' })).toEqual([]);
+    const warnings = excludeTestWarnings(six);
+    expect(warnings.join(' ')).toMatch(/6 exclusions/);
+    expect(warnings.join(' ')).toMatch(/internal_group/);
   });
 });
 

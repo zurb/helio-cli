@@ -256,9 +256,91 @@ describe('walkthroughScreenJson', () => {
   it('question screens expose the agent-facing field set', () => {
     expect(Object.keys(json[2]).sort()).toEqual([
       'allow_multiple', 'assets', 'branching', 'choices', 'hotspots', 'kind',
-      'position', 'q_number', 'question', 'randomize_choices', 'raw_type',
-      'renderable', 'scale_type', 'site_link', 'type', 'type_label', 'ux_metric',
+      'position', 'preference_options', 'q_number', 'question', 'randomize_choices',
+      'raw_type', 'renderable', 'scale_type', 'site_link', 'type', 'type_label',
+      'ux_metric',
     ]);
+  });
+
+  it('nulls preference_options on every non-preference screen', () => {
+    for (const screen of json.slice(1)) {
+      expect(screen.preference_options).toBeNull();
+    }
+  });
+});
+
+// ─── Preference screens ──────────────────────────────────────────────────────
+// A preference question's options are its VARIATIONS — one full-size image
+// each — not Choice records hanging off variations[0]. Reading them as choices
+// rendered the screen with no options at all, and an option with no image is a
+// launch blocker that the participant view gives no hint of.
+
+describe('buildWalkthroughScreens — preference', () => {
+  const preferenceTest = (variations: Record<string, unknown>[]): TestShowResponse =>
+    ({
+      introduction: '',
+      sections: [
+        {
+          id: 'sec-pref',
+          type: 'PreferenceDirectiveSection',
+          position: 1,
+          instructions: '<p>Which do you prefer?</p>',
+          stripped_instructions: 'Which do you prefer?',
+          likert_type: '',
+          variations: variations as never,
+        },
+      ],
+    }) as unknown as TestShowResponse;
+
+  it('reads the options off the variations, not variations[0].choices', () => {
+    const [screen] = buildWalkthroughScreens(
+      preferenceTest([
+        { id: 'v1', name: 'Data In', type: 'PreferenceVariation', choices: [], asset_id: 61016, has_asset: true },
+        { id: 'v2', name: 'The Vertical', type: 'PreferenceVariation', choices: [], asset_id: 61017, has_asset: true },
+      ]),
+    );
+    if (screen.kind !== 'question') throw new Error('expected a question screen');
+    expect(screen.choices).toEqual(['Data In', 'The Vertical']);
+    expect(screen.preference_options).toEqual([
+      { name: 'Data In', asset_id: 61016, has_asset: true, site_link: null },
+      { name: 'The Vertical', asset_id: 61017, has_asset: true, site_link: null },
+    ]);
+  });
+
+  it('marks an option with no asset as imageless', () => {
+    const [screen] = buildWalkthroughScreens(
+      preferenceTest([
+        { id: 'v1', name: 'Data In', type: 'PreferenceVariation', choices: [], asset_id: 61016 },
+        { id: 'v2', name: 'The Vertical', type: 'PreferenceVariation', choices: [], asset_id: null },
+      ]),
+    );
+    if (screen.kind !== 'question') throw new Error('expected a question screen');
+    expect(screen.preference_options?.map(o => o.has_asset)).toEqual([true, false]);
+  });
+
+  it('renders every option and calls the missing images a launch blocker', () => {
+    const [screen] = buildWalkthroughScreens(
+      preferenceTest([
+        { id: 'v1', name: 'Data In', type: 'PreferenceVariation', choices: [], asset_id: 61016 },
+        { id: 'v2', name: 'The Vertical', type: 'PreferenceVariation', choices: [], asset_id: null },
+      ]),
+    );
+    const rendered = renderWalkthroughScreen(screen).join('\n');
+    expect(rendered).toMatch(/Data In/);
+    expect(rendered).toMatch(/The Vertical.*no image/);
+    expect(rendered).toMatch(/1 of 2 options have no image/);
+  });
+
+  it('keeps the plain side-by-side note when every option has an image', () => {
+    const [screen] = buildWalkthroughScreens(
+      preferenceTest([
+        { id: 'v1', name: 'Data In', type: 'PreferenceVariation', choices: [], asset_id: 61016 },
+        { id: 'v2', name: 'The Vertical', type: 'PreferenceVariation', choices: [], asset_id: 61017 },
+      ]),
+    );
+    const rendered = renderWalkthroughScreen(screen).join('\n');
+    expect(rendered).toMatch(/side-by-side images/);
+    expect(rendered).not.toMatch(/no image/);
   });
 });
 
