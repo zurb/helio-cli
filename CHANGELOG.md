@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.10.0
+
+Ships against the 2026-09-15 Public API release, zurb/helio#5039 (question
+stimulus assets + the question introduction card). Against an older API both
+new fields are still dropped without an error — `tests preview` now reads them
+back, so a drop is
+visible before launch. Nothing that worked in 0.9.0 stops working, except the
+local rejections below, each of which was already a silent drop or a 400.
+
+### Breaking (JSON output shape)
+- **`tests walkthrough --output json` gains `disable_instruction_card`** on
+  every question screen (`false` unless the introduction card is skipped).
+- **`tests preview --output json` gains `disable_instruction_card`** on every
+  question, and **`asset_id`** on the types that have a stimulus slot (left
+  out on preference and card sort, where a write would reject it). Both are
+  write keys, so preview output still feeds straight back into `create` /
+  `add-question`.
+
+### Added
+- **A stimulus on every single-variation question type.** `--asset-id` (and
+  `asset_id` in questions JSON) now lands on `multiple_choice`, `likert`,
+  `nps`, `ranking`, `matrix`, `point_allocation` and `max_diff`, not just
+  `free_response` and `click_test`. The editor has always had the upload slot;
+  the API took the field on these types with a 200 and dropped it, which read
+  as a platform limit.
+- **`--skip-question-intro`** on `tests add-question` and `tests edit-question`
+  (plus `--no-skip-question-intro` on edit), and `disable_instruction_card` in
+  questions JSON — the editor's "Skip question introduction": the participant
+  opens straight on the stimulus and answers instead of seeing the question
+  text on its own card first. An `edit-question --type` replacement recreates
+  the section, so the setting resets unless passed again.
+- **Read-back.** `tests preview` prints each question's stimulus asset, site
+  link, and a skipped introduction card. `tests walkthrough` renders a skipped
+  introduction card, and names a stimulus even when the payload carries only
+  its `asset_id` (previously an asset with no URL and no pending status
+  printed nothing).
+- `tests question-types` and `guide` list `asset_id` and
+  `disable_instruction_card` per type.
+
+### Changed
+Local validation, so `--dry-run` catches what was a silent drop or a 400:
+- A question-level `asset_id` on `preference` or `card_sort` is rejected —
+  preference is pointed at `asset_id` on each option in `variations`. This
+  matches the API's new 400.
+- A question-level `site_link` is rejected on every type but `free_response`
+  and `click_test`, the only ones whose sections save it.
+- A non-boolean `disable_instruction_card` is rejected.
+- `edit-question` without `--type` (a UX metric section edit) rejects
+  `--skip-question-intro` / `--no-skip-question-intro`: the API ignores the
+  setting on metric sections, so it has to be set in the editor.
+
 ## 0.9.0
 
 Ships against the 2026-08-23 Public API release (preference variation images +

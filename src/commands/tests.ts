@@ -12,16 +12,33 @@ function makeClient(program: Command): HelioClient {
   return new HelioClient(resolveCredentials(opts));
 }
 
+// A question-level asset_id is the stimulus shown with the question — the one
+// upload slot (image, video or audio) on a single-variation section. Preference
+// hangs an image off each option instead and card sort has no slot, so the API
+// 400s a question-level asset_id on both (2026-09-15 API release, zurb/helio#5039). Before that
+// release it saved one only on free_response and click_test and silently
+// dropped it everywhere else.
+const STIMULUS_ASSET_TYPES = new Set([
+  'free_response', 'multiple_choice', 'likert', 'nps', 'ranking',
+  'matrix', 'point_allocation', 'max_diff', 'click_test',
+]);
+
+// The only types whose section builders save a question-level site_link; every
+// other type takes it with a 200 and drops it.
+const SITE_LINK_TYPES = new Set(['free_response', 'click_test']);
+
+const isPresent = (value: unknown) => value !== undefined && value !== null && value !== '';
+
 // Keys match the `type` field returned in report JSON — 1:1 with the API.
 // The create endpoint accepts both snake_case and PascalCase (e.g. "free_response" or "FreeResponse").
-const QUESTION_TYPES = {
+export const QUESTION_TYPES = {
   // ── Creatable via POST /tests ──────────────────────────────────
   free_response: {
     description: 'Open-ended text response',
     creatable: true,
     also_accepts: 'FreeResponse',
     required: ['type', 'instructions'],
-    optional: ['asset_id', 'site_link'],
+    optional: ['asset_id', 'site_link', 'disable_instruction_card'],
     example: {
       type: 'free_response',
       instructions: 'What would you improve about our product?',
@@ -34,7 +51,7 @@ const QUESTION_TYPES = {
     creatable: true,
     also_accepts: 'MultipleChoice',
     required: ['type', 'instructions', 'choices'],
-    optional: ['allow_multiple', 'randomize_choices', 'branching'],
+    optional: ['allow_multiple', 'randomize_choices', 'branching', 'asset_id', 'disable_instruction_card'],
     example: {
       type: 'multiple_choice',
       instructions: 'How did you hear about us?',
@@ -52,7 +69,7 @@ const QUESTION_TYPES = {
     creatable: true,
     also_accepts: 'Likert',
     required: ['type', 'instructions', 'scale_type'],
-    optional: ['custom_choices'],
+    optional: ['custom_choices', 'asset_id', 'disable_instruction_card'],
     scale_types: [
       'agreement',
       'occurrence',
@@ -85,7 +102,7 @@ const QUESTION_TYPES = {
     creatable: true,
     also_accepts: 'NPS',
     required: ['type', 'instructions'],
-    optional: [],
+    optional: ['asset_id', 'disable_instruction_card'],
     example: {
       type: 'nps',
       instructions: 'How likely are you to recommend us to a friend?',
@@ -100,7 +117,7 @@ const QUESTION_TYPES = {
     creatable: true,
     also_accepts: 'Ranking',
     required: ['type', 'instructions', 'choices'],
-    optional: [],
+    optional: ['asset_id', 'disable_instruction_card'],
     example: {
       type: 'ranking',
       instructions: 'Rank these features by importance',
@@ -114,7 +131,7 @@ const QUESTION_TYPES = {
     creatable: true,
     also_accepts: 'Preference',
     required: ['type', 'instructions', 'variations'],
-    optional: [],
+    optional: ['disable_instruction_card'],
     example: {
       type: 'preference',
       instructions: 'Which do you prefer?',
@@ -124,7 +141,7 @@ const QUESTION_TYPES = {
       ],
     },
     notes:
-      'The options are variations, not choices — one full-size image each, which is what GET /tests/:id reads them back as. Each option is either a plain string or an object {name (or text), asset_id?, site_link?}, and the two forms can be mixed. asset_id must be an IMAGE asset on the test\'s own account (upload via `assets upload`). `choices` is still accepted as a legacy alias, but passing both is a 400. An option with no asset_id is a valid draft; `tests validate` reports the missing image as a launch blocker.',
+      'The options are variations, not choices — one full-size image each, which is what GET /tests/:id reads them back as. Each option is either a plain string or an object {name (or text), asset_id?, site_link?}, and the two forms can be mixed. asset_id must be an IMAGE asset on the test\'s own account (upload via `assets upload`). `choices` is still accepted as a legacy alias, but passing both is a 400. An option with no asset_id is a valid draft; `tests validate` reports the missing image as a launch blocker. A question-level asset_id or site_link is rejected — the images are the options.',
     summary_fields: 'results: [{id, text, percent, count, image_url?}]',
     response_fields: 'selected_variation: {id, name}',
   },
@@ -133,7 +150,7 @@ const QUESTION_TYPES = {
     creatable: true,
     also_accepts: 'Matrix',
     required: ['type', 'instructions', 'choices', 'categories'],
-    optional: [],
+    optional: ['asset_id', 'disable_instruction_card'],
     example: {
       type: 'matrix',
       instructions: 'Rate each feature',
@@ -148,7 +165,7 @@ const QUESTION_TYPES = {
     creatable: true,
     also_accepts: 'ClickTest',
     required: ['type', 'instructions', 'asset_id'],
-    optional: ['hotspots', 'site_link'],
+    optional: ['hotspots', 'site_link', 'disable_instruction_card'],
     example: {
       type: 'click_test',
       instructions: 'Where would you click to start a return?',
@@ -165,7 +182,8 @@ const QUESTION_TYPES = {
     creatable: true,
     also_accepts: 'CardSort',
     required: ['type', 'instructions', 'choices', 'categories'],
-    optional: ['random_category_order', 'can_skip_cards'],
+    optional: ['random_category_order', 'can_skip_cards', 'disable_instruction_card'],
+    notes: 'Card sort has no stimulus slot — a question-level asset_id is rejected.',
     example: {
       type: 'card_sort',
       instructions: 'Sort these items into categories',
@@ -186,7 +204,7 @@ const QUESTION_TYPES = {
     creatable: true,
     also_accepts: 'MaxDiff',
     required: ['type', 'instructions', 'choices'],
-    optional: [],
+    optional: ['asset_id', 'disable_instruction_card'],
     example: {
       type: 'max_diff',
       instructions: 'Choose the most and least important',
@@ -200,7 +218,7 @@ const QUESTION_TYPES = {
     creatable: true,
     also_accepts: 'PointAllocation',
     required: ['type', 'instructions', 'choices'],
-    optional: ['points', 'points_label'],
+    optional: ['points', 'points_label', 'asset_id', 'disable_instruction_card'],
     example: {
       type: 'point_allocation',
       instructions: 'Distribute 100 points across these features',
@@ -302,6 +320,8 @@ export interface SectionData {
   stripped_instructions: string;
   likert_type: string;
   variations: VariationData[];
+  /** "Skip question introduction" in the editor: no instruction card before the question. */
+  disable_instruction_card?: boolean;
   /** Read-back of what `branching` writes. Omitted when the section has none. */
   branching?: BranchingData[];
   /** Click sections only. Empty array = engagement heatmap, no hotspot scoring. */
@@ -760,11 +780,37 @@ function printSectionQuestions(sections: SectionData[]): void {
       }
     }
 
+    for (const line of sectionStimulusLines(s)) console.log(line);
     printHotspots(s);
     printBranching(s, qIndex);
 
     console.log();
   }
+}
+
+/**
+ * What a question shows alongside its text: the stimulus on its one variation,
+ * and whether the introduction card that normally comes first is skipped. Both
+ * are write fields, and a stimulus the API dropped is indistinguishable from
+ * one never sent unless the preview says what actually saved.
+ */
+export function sectionStimulusLines(s: SectionData): string[] {
+  const lines: string[] = [];
+  // Preference images are the options, which print their own slots.
+  if (!preferenceOptions(s)) {
+    const variation = s.variations?.[0];
+    if (variation && (variation.asset_id != null || variation.has_asset)) {
+      const kind = variation.asset_type ? `${variation.asset_type} ` : '';
+      lines.push(`      \x1b[90m🖼 stimulus: ${kind}asset ${variation.asset_id ?? '(attached)'}\x1b[0m`);
+    }
+    if (variation?.site_link) {
+      lines.push(`      \x1b[90m→ ${variation.site_link}\x1b[0m`);
+    }
+  }
+  if (s.disable_instruction_card) {
+    lines.push('      \x1b[90mⓘ skips the question introduction — opens straight on the stimulus and answers\x1b[0m');
+  }
+  return lines;
 }
 
 /**
@@ -977,6 +1023,7 @@ export function buildQuestionsFromSections(sections: SectionData[] | undefined):
       // key a write takes — so emit them under the name they can be sent back
       // under, rather than the empty `choices` list this used to produce.
       const options = preferenceOptions(s);
+      const canonical = RAW_TYPE_TO_CANONICAL[s.type] ?? s.type;
       return {
         position: i + 1,
         type: s.type,
@@ -990,6 +1037,11 @@ export function buildQuestionsFromSections(sections: SectionData[] | undefined):
                   ?.sort((a, b) => a.position - b.position)
                   .map(c => c.text) ?? [],
             }),
+        // Also write keys. A question-level asset_id only exists where the
+        // section has a stimulus slot — on preference or card sort a write
+        // would reject it, so it is left out rather than emitted as null.
+        ...(STIMULUS_ASSET_TYPES.has(canonical) ? { asset_id: s.variations?.[0]?.asset_id ?? null } : {}),
+        disable_instruction_card: s.disable_instruction_card === true,
         // Metric-owned questions are auto-generated and structurally locked —
         // agents must not treat them as editable hand-written questions.
         ...(metric ? { ux_metric: { id: metric.id, type: metric.type } } : {}),
@@ -1070,6 +1122,7 @@ interface QuestionInput {
   points_label?: string;
   random_category_order?: boolean;
   can_skip_cards?: boolean;
+  disable_instruction_card?: boolean | null;
   position?: number;
   followup?: FollowupInput;
   hotspots?: unknown[];
@@ -1674,6 +1727,36 @@ export function validateQuestions(
           message: 'Read-only report field. Use followup: {"question": "...", "required": true, "for_choices": [0]} instead',
         });
       }
+    }
+
+    // A stimulus rides on the question's one variation. The API 400s it where
+    // there is no such slot rather than dropping it, so say the same thing
+    // here — and point preference at the key that does carry its images.
+    if (isPresent(q.asset_id) && !STIMULUS_ASSET_TYPES.has(canonical)) {
+      errors.push({
+        question: num,
+        field: 'asset_id',
+        message:
+          canonical === 'preference'
+            ? 'Not a preference field — the images are the options: set asset_id on each option in variations instead'
+            : `${canonical} has no stimulus slot, so it cannot carry an asset_id`,
+      });
+    }
+
+    // Unlike asset_id, a misplaced site_link is still a silent drop upstream.
+    if (isPresent(q.site_link) && !SITE_LINK_TYPES.has(canonical)) {
+      errors.push({
+        question: num,
+        field: 'site_link',
+        message:
+          canonical === 'preference'
+            ? 'Not a preference field — set site_link on each option in variations instead'
+            : `Only free_response and click_test questions save a site_link — on ${canonical} the API drops it`,
+      });
+    }
+
+    if (q.disable_instruction_card != null && typeof q.disable_instruction_card !== 'boolean') {
+      errors.push({ question: num, field: 'disable_instruction_card', message: 'Must be true or false' });
     }
 
     // Type-specific validation
@@ -2292,6 +2375,8 @@ export type WalkthroughScreen =
       scale_type?: string;
       ux_metric?: string;
       site_link?: string;
+      /** The question opens straight on its stimulus and answers, with no introduction card first. */
+      disable_instruction_card: boolean;
       assets: WalkthroughAsset[];
       /**
        * Read-back of what `branching` writes; omitted when the section has none.
@@ -2371,7 +2456,7 @@ export function buildWalkthroughScreens(test: TestShowResponse): WalkthroughScre
     const allowMultiple = Boolean((s as { allow_multiple?: unknown }).allow_multiple);
 
     const assets: WalkthroughAsset[] = (s.variations ?? [])
-      .filter(v => v.has_asset || v.screenshot_url || v.thumb_url)
+      .filter(v => v.has_asset || v.asset_id != null || v.screenshot_url || v.thumb_url)
       .map(v => ({
         variation_id: v.id,
         variation_name: v.name,
@@ -2397,6 +2482,7 @@ export function buildWalkthroughScreens(test: TestShowResponse): WalkthroughScre
       scale_type: s.likert_type || undefined,
       ux_metric: uxMetric,
       site_link: variation?.site_link || undefined,
+      disable_instruction_card: s.disable_instruction_card === true,
       assets,
       branching: Array.isArray(s.branching) && s.branching.length
         ? s.branching.map(b => ({ ...b, target_q_number: branchTargetQNumber(b, qIndex) }))
@@ -2464,6 +2550,9 @@ function stimulusLines(screen: WalkthroughScreen): string[] {
       lines.push(`  \x1b[90m🖼  ${label}${url}${pending}\x1b[0m`);
     } else if (pending) {
       lines.push(`  \x1b[90m🖼  ${label}${asset.type ?? 'asset'} attached${pending} — no URL yet\x1b[0m`);
+    } else {
+      const kind = asset.type ? `${asset.type} ` : '';
+      lines.push(`  \x1b[90m🖼  ${label}${kind}asset ${asset.asset_id ?? '(attached)'} — no URL in this payload\x1b[0m`);
     }
   }
   if (screen.site_link) {
@@ -2487,6 +2576,10 @@ export function renderWalkthroughScreen(screen: WalkthroughScreen): string[] {
   }
   const stimuli = stimulusLines(screen);
   if (stimuli.length) lines.push(...stimuli);
+  if (screen.disable_instruction_card) {
+    // Normally the question text gets a card of its own before the stimulus.
+    lines.push('  \x1b[90mⓘ no question introduction card — opens straight on the stimulus and answers\x1b[0m');
+  }
   lines.push('');
 
   if (screen.renderable === 'placeholder') {
@@ -2937,6 +3030,7 @@ export function walkthroughScreenJson(screen: WalkthroughScreen): Record<string,
     scale_type: screen.scale_type ?? null,
     ux_metric: screen.ux_metric ?? null,
     site_link: screen.site_link ?? null,
+    disable_instruction_card: screen.disable_instruction_card,
     assets: screen.assets,
     branching: screen.branching ?? null,
     hotspots: screen.hotspots ?? null,
@@ -3601,9 +3695,10 @@ export function registerTestsCommand(program: Command): void {
     .option('--points-label <label>', 'Label for points (for point_allocation)')
     .option('--random-category-order', 'Randomize category order (for card_sort)')
     .option('--can-skip-cards', 'Allow skipping cards (for card_sort)')
-    .option('--asset-id <id>', 'Asset ID (stimulus image; required for click_test)')
-    .option('--site-link <url>', 'Site link URL (for free_response stimulus)')
+    .option('--asset-id <id>', 'Stimulus asset ID, shown with the question (free_response, multiple_choice, likert, nps, ranking, matrix, point_allocation, max_diff; an image is required for click_test). Not preference (asset_id goes on each option in --variations) or card_sort (no stimulus slot).')
+    .option('--site-link <url>', 'Site link URL (free_response and click_test only)')
     .option('--hotspots <json>', 'Hotspots as JSON array or @path/to/file.json (for click_test): [{name?, x, y, width, height, priority?}]')
+    .option('--skip-question-intro', 'Skip the question introduction card, so participants open straight on the stimulus and answers (disable_instruction_card; "Skip question introduction" in the editor)')
     .option('--branching <json>', 'Branching as JSON array or @file (single-select multiple_choice; requires a Helio Enterprise account): [{choice, action: skip_to_question|end_test, question?|section_id?, message?, redirect_url?}]. Skips are forward-only.')
     .option('--position <n>', 'Insert at this 1-based position (appends if omitted)')
     .option('--followup <text>', 'Follow-up question text')
@@ -3630,6 +3725,7 @@ export function registerTestsCommand(program: Command): void {
         if (cmdOpts.assetId) question.asset_id = cmdOpts.assetId;
         if (cmdOpts.siteLink) question.site_link = cmdOpts.siteLink;
         if (cmdOpts.hotspots) question.hotspots = parseJsonOrFile(cmdOpts.hotspots) as unknown[];
+        if (cmdOpts.skipQuestionIntro) question.disable_instruction_card = true;
         if (cmdOpts.branching) question.branching = parseJsonOrFile(cmdOpts.branching) as unknown[];
         if (cmdOpts.position) question.position = parsePositiveInt(cmdOpts.position, '--position');
         const followup = buildFollowupFromFlags(cmdOpts);
@@ -3693,8 +3789,10 @@ export function registerTestsCommand(program: Command): void {
     .option('--points-label <label>', 'Label for points')
     .option('--random-category-order', 'Randomize category order')
     .option('--can-skip-cards', 'Allow skipping cards')
-    .option('--asset-id <id>', 'Asset ID (stimulus image)')
-    .option('--site-link <url>', 'Site link URL (stimulus)')
+    .option('--asset-id <id>', 'Stimulus asset ID (see add-question for the types that take one; also a safe edit on a UX metric section)')
+    .option('--site-link <url>', 'Site link URL (free_response and click_test on a --type replacement; also a safe edit on a UX metric section)')
+    .option('--skip-question-intro', 'Skip the question introduction card (disable_instruction_card). --type replacement only, and a replacement recreates the section, so pass it again to keep it.')
+    .option('--no-skip-question-intro', 'Show the question introduction card (the default)')
     .option('--hotspots <json>', 'Hotspots as JSON array or @path/to/file.json, for a click_test question or a click section of a UX metric: [{name?, x, y, width, height, priority?}]. Replaces the existing set.')
     .option('--brand-choice <index>', '0-based index of the choice that is your brand (brand_score market recognition section only)')
     .option('--branching <json>', 'Branching as JSON array or @file (single-select multiple_choice; requires a Helio Enterprise account): [{choice, action: skip_to_question|end_test, question?|section_id?, message?, redirect_url?}]. Skips are forward-only.')
@@ -3728,6 +3826,7 @@ export function registerTestsCommand(program: Command): void {
         if (cmdOpts.assetId) question.asset_id = cmdOpts.assetId;
         if (cmdOpts.siteLink) question.site_link = cmdOpts.siteLink;
         if (cmdOpts.hotspots) question.hotspots = parseJsonOrFile(cmdOpts.hotspots) as unknown[];
+        if (cmdOpts.skipQuestionIntro !== undefined) question.disable_instruction_card = cmdOpts.skipQuestionIntro;
         if (cmdOpts.brandChoice !== undefined) {
           const parsed = Number(cmdOpts.brandChoice);
           if (!Number.isInteger(parsed) || parsed < 0) {
@@ -3767,6 +3866,13 @@ export function registerTestsCommand(program: Command): void {
             return;
           }
         } else {
+          // The metric-section edit path never reads disable_instruction_card,
+          // so the API would answer 200 and change nothing.
+          if (question.disable_instruction_card !== undefined) {
+            throw new Error(
+              '--skip-question-intro / --no-skip-question-intro need --type: the API ignores the introduction card setting on a UX metric section, so set that one in the Helio editor.',
+            );
+          }
           // UX metric section edit — reject structural flags
           const structuralFlags: [string, string][] = [
             // No UX metric emits a preference section, so --variations here is

@@ -36,6 +36,7 @@ const screens: WalkthroughScreen[] = [
     choices: [],
     randomize_choices: false,
     allow_multiple: false,
+    disable_instruction_card: false,
     assets: [],
     renderable: 'full',
   },

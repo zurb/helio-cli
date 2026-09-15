@@ -190,9 +190,20 @@ helio-cli tests add-question <test-uuid> \
     --type free_response \
     --instructions "What stands out on this page?" \
     --asset-id <asset-id>
+
+# Most question types take one — and can skip the question introduction card
+helio-cli tests add-question <test-uuid> \
+    --type likert --scale-type agreement \
+    --instructions "This label tells me what the button does." \
+    --asset-id <asset-id> \
+    --skip-question-intro
 ```
 
 Uploads return immediately with `status: "processing"`; poll `assets get <asset-id>` until `status` is `complete` to get dimensions and URLs. Asset ids are numeric (unlike test/project uuids).
+
+A question-level `--asset-id` is the stimulus shown with the question, and `free_response`, `multiple_choice`, `likert`, `nps`, `ranking`, `matrix`, `point_allocation`, `max_diff` and `click_test` all take one. Preference questions carry their images per option instead (`--variations`) and card sort has no stimulus slot, so both reject it. `--site-link` is saved on `free_response` and `click_test` only. Before the 2026-09-15 Public API release (zurb/helio#5039), only `free_response` and `click_test` saved an `asset_id` — the other types took it and silently dropped it — so check `tests preview`, which reads back each question's stimulus.
+
+`--skip-question-intro` sets `disable_instruction_card`, the editor's "Skip question introduction": the participant opens straight on the stimulus and answers instead of seeing the question text on its own card first. `edit-question --type` recreates the section, so pass the flag again to keep it; a UX metric section can't be given it through the API.
 
 ### Question Types
 
