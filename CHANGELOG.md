@@ -5,9 +5,9 @@
 Ships against the 2026-09-15 Public API release, zurb/helio#5039 (question
 stimulus assets + the question introduction card). Against an older API both
 new fields are still dropped without an error — `tests preview` now reads them
-back, so a drop is
-visible before launch. Nothing that worked in 0.9.0 stops working, except the
-local rejections below, each of which was already a silent drop or a 400.
+back, so a drop is visible before launch. Nothing that worked in 0.9.0 stops
+working, except the local rejections below, each of which was already a silent
+drop or a 400.
 
 ### Breaking (JSON output shape)
 - **`tests walkthrough --output json` gains `disable_instruction_card`** on
@@ -50,6 +50,21 @@ Local validation, so `--dry-run` catches what was a silent drop or a 400:
 - `edit-question` without `--type` (a UX metric section edit) rejects
   `--skip-question-intro` / `--no-skip-question-intro`: the API ignores the
   setting on metric sections, so it has to be set in the editor.
+
+### Fixed
+Both found by running 0.10.0 against production, not the test suite:
+- **Sections named by their STI class are recognised.** `GET /tests/:id` calls a
+  section `MultipleChoiceSection`, `RankSection`, `NpsSection`, `ClickSection`
+  and so on, but the CLI only knew the `…DirectiveSection` spellings it had seen
+  in other payloads. Anything keyed off the question type fell through on real
+  tests: preference options read as empty, click/tree/prototype screens rendered
+  as if a participant could answer them inline, multiple choice lost its option
+  bullets, and the type printed as the raw class name.
+- **`tests preview` keeps the new fields on a test that has report data** —
+  which is every real test, a draft at 0 responses included. The report supplies
+  the questions and carries neither field, so `--output json` merges them in
+  from the sections (matched on position, and only when the two lists line up),
+  and the text view reports them in its Structure block.
 
 ## 0.9.0
 

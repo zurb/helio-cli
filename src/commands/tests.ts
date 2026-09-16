@@ -556,7 +556,7 @@ const TYPE_LABELS: Record<string, string> = {
 // a label renders "[undefined]"/"[null]", which reads like a CLI bug rather
 // than missing upstream data, so name the condition instead.
 function typeLabel(type: string | null | undefined, fallback?: string | null): string {
-  if (type) return TYPE_LABELS[type] ?? type;
+  if (type) return TYPE_LABELS[type] ?? TYPE_LABELS[RAW_TYPE_TO_CANONICAL[type] ?? ''] ?? type;
   if (fallback) return TYPE_LABELS[fallback] ?? fallback;
   return 'unknown type';
 }
@@ -915,13 +915,14 @@ function printBranching(s: SectionData, qIndex: Map<number, number>): void {
 }
 
 /**
- * Branching and hotspots for a launched test, where report data supplies the
- * questions and carries neither. Only sections that have something to say.
+ * Branching, hotspots, the stimulus and the introduction card for a test whose
+ * questions came from report data, which carries none of them. Only sections
+ * that have something to say.
  */
 function printStructureNotes(sections: SectionData[] | undefined): void {
   const withNotes = [...(sections ?? [])]
     .sort((a, b) => a.position - b.position)
-    .filter(s => Array.isArray(s.branching) || Array.isArray(s.hotspots));
+    .filter(s => Array.isArray(s.branching) || Array.isArray(s.hotspots) || sectionStimulusLines(s).length > 0);
   if (!withNotes.length) return;
 
   const ordered = [...(sections ?? [])].sort((a, b) => a.position - b.position);
@@ -930,6 +931,7 @@ function printStructureNotes(sections: SectionData[] | undefined): void {
   for (const s of withNotes) {
     const q = ordered.indexOf(s) + 1;
     console.log(`  \x1b[1mQ${q}.\x1b[0m ${s.stripped_instructions || stripHtml(s.instructions || '')}`);
+    for (const line of sectionStimulusLines(s)) console.log(line);
     printHotspots(s);
     printBranching(s, qIndex);
   }
@@ -1047,6 +1049,33 @@ export function buildQuestionsFromSections(sections: SectionData[] | undefined):
         ...(metric ? { ux_metric: { id: metric.id, type: metric.type } } : {}),
       };
     });
+}
+
+/**
+ * Report questions carry results but neither the stimulus nor the introduction
+ * card, and every real test has report data — even a draft at 0 responses — so
+ * without this the preview's JSON would lose both fields exactly where it has
+ * the most to say. The two lists share no id (a report question's is a ULID, a
+ * section's is numeric, and temporary_uuid comes back null), so the join is
+ * position order, and only when the lists line up.
+ */
+export function mergeSectionFieldsIntoReportQuestions(
+  questions: ReportQuestion[],
+  sections: SectionData[] | undefined,
+): Record<string, unknown>[] {
+  const byPosition = [...questions].sort((a, b) => a.position - b.position);
+  const ordered = [...(sections ?? [])].sort((a, b) => a.position - b.position);
+  if (!ordered.length || ordered.length !== byPosition.length) return byPosition as Record<string, unknown>[];
+
+  return byPosition.map((q, i) => {
+    const s = ordered[i];
+    const canonical = RAW_TYPE_TO_CANONICAL[s.type] ?? s.type;
+    return {
+      ...q,
+      ...(STIMULUS_ASSET_TYPES.has(canonical) ? { asset_id: s.variations?.[0]?.asset_id ?? null } : {}),
+      disable_instruction_card: s.disable_instruction_card === true,
+    };
+  });
 }
 
 // Parses a JSON array from an inline string or @path/to/file.json, prefixing
@@ -2391,11 +2420,7 @@ export type WalkthroughScreen =
       renderable: 'full' | 'placeholder';
     };
 
-const ASSET_HEAVY_RAW_TYPES = new Set([
-  'ClickTestDirectiveSection',
-  'TreeTestDirectiveSection',
-  'PrototypeDirectiveSection',
-]);
+const ASSET_HEAVY_TYPES = new Set(['click_test', 'tree_test', 'prototype_task']);
 
 // Maps API section type → canonical snake_case
 const RAW_TYPE_TO_CANONICAL: Record<string, string> = {
@@ -2412,6 +2437,20 @@ const RAW_TYPE_TO_CANONICAL: Record<string, string> = {
   MaxDiffDirectiveSection: 'max_diff',
   PointAllocationDirectiveSection: 'point_allocation',
   PrototypeDirectiveSection: 'prototype_task',
+  // GET /tests/:id names a section by the model's own STI class; the
+  // "…DirectiveSection" spellings above reach the CLI from other payloads.
+  FreeResponseSection: 'free_response',
+  MultipleChoiceSection: 'multiple_choice',
+  LikertSection: 'likert',
+  NpsSection: 'nps',
+  PreferenceSection: 'preference',
+  RankSection: 'ranking',
+  MatrixSection: 'matrix',
+  ClickSection: 'click_test',
+  CardSortSection: 'card_sort',
+  TreeTestSection: 'tree_test',
+  MaxDiffSection: 'max_diff',
+  PointAllocationSection: 'point_allocation',
 };
 
 // Endpoints for likert scale visualisations
@@ -2488,7 +2527,7 @@ export function buildWalkthroughScreens(test: TestShowResponse): WalkthroughScre
         ? s.branching.map(b => ({ ...b, target_q_number: branchTargetQNumber(b, qIndex) }))
         : undefined,
       hotspots: Array.isArray(s.hotspots) ? s.hotspots : undefined,
-      renderable: ASSET_HEAVY_RAW_TYPES.has(s.type) ? 'placeholder' : 'full',
+      renderable: ASSET_HEAVY_TYPES.has(canonical) ? 'placeholder' : 'full',
     });
   }
 
@@ -3350,7 +3389,9 @@ export function registerTestsCommand(program: Command): void {
               ...meta,
               introduction: test.introduction ?? null,
             },
-            questions: reportData?.questions_summary ?? buildQuestionsFromSections(test.sections),
+            questions: reportData?.questions_summary?.length
+              ? mergeSectionFieldsIntoReportQuestions(reportData.questions_summary, test.sections)
+              : buildQuestionsFromSections(test.sections),
             // Key presence is server-version detection: the 2026-08 API omits
             // ux_metrics (rather than sending []) when a test has none.
             ...('ux_metrics' in test ? { ux_metrics: test.ux_metrics } : {}),

@@ -469,8 +469,8 @@ describe('walkthrough read-back', () => {
       },
       {
         // A click section owned by a hotspot-scored metric, with no hotspots.
-        // Its raw type is "ClickSection" — NOT one of ASSET_HEAVY_RAW_TYPES —
-        // so it renders through the normal path, which must still warn.
+        // "ClickSection" is the STI name GET returns, so this renders on the
+        // browser-only placeholder path — which must warn just the same.
         id: '33', type: 'ClickSection', position: 3,
         instructions: '', stripped_instructions: 'Click checkout', likert_type: '',
         variations: [{ id: 'vc', name: 'Click', type: 'ClickVariation', choices: [] }],
@@ -495,8 +495,9 @@ describe('walkthrough read-back', () => {
     const click = screens[2];
     expect(click.kind).toBe('question');
     if (click.kind === 'question') {
-      // Precondition for the bug this covers: it is not on the placeholder path.
-      expect(click.renderable).toBe('full');
+      // The warning has to survive the placeholder path, where the screen is
+      // not rendered as answerable at all.
+      expect(click.renderable).toBe('placeholder');
       expect(click.hotspots).toEqual([]);
     }
     const rendered = renderWalkthroughScreen(screens[2]).join('\n');
