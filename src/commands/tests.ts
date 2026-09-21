@@ -27,6 +27,21 @@ const STIMULUS_ASSET_TYPES = new Set([
 // other type takes it with a 200 and drops it.
 const SITE_LINK_TYPES = new Set(['free_response', 'click_test']);
 
+// "Image Display Time" in the editor: show the stimulus image for N seconds,
+// then hide it and reveal the question. Only these types' take screens read the
+// timer — preference, card sort and click test 400 it rather than store a
+// setting that does nothing (2026-09-19 API release, zurb/helio#5048).
+const TIMED_QUESTION_TYPES = new Set([
+  'free_response', 'multiple_choice', 'likert', 'nps', 'ranking',
+  'matrix', 'point_allocation', 'max_diff',
+]);
+
+/** The only durations the editor's dropdown can render back. */
+export const DISPLAY_SECONDS_OPTIONS = [5, 10, 15] as const;
+
+/** Public device names, in the editor's order. Omitting `devices` targets all three. */
+export const DEVICES = ['desktop', 'tablet', 'mobile'] as const;
+
 const isPresent = (value: unknown) => value !== undefined && value !== null && value !== '';
 
 // Keys match the `type` field returned in report JSON — 1:1 with the API.
@@ -38,7 +53,7 @@ export const QUESTION_TYPES = {
     creatable: true,
     also_accepts: 'FreeResponse',
     required: ['type', 'instructions'],
-    optional: ['asset_id', 'site_link', 'disable_instruction_card'],
+    optional: ['asset_id', 'site_link', 'disable_instruction_card', 'display_seconds'],
     example: {
       type: 'free_response',
       instructions: 'What would you improve about our product?',
@@ -51,7 +66,7 @@ export const QUESTION_TYPES = {
     creatable: true,
     also_accepts: 'MultipleChoice',
     required: ['type', 'instructions', 'choices'],
-    optional: ['allow_multiple', 'randomize_choices', 'branching', 'asset_id', 'disable_instruction_card'],
+    optional: ['allow_multiple', 'randomize_choices', 'branching', 'asset_id', 'disable_instruction_card', 'display_seconds'],
     example: {
       type: 'multiple_choice',
       instructions: 'How did you hear about us?',
@@ -69,7 +84,7 @@ export const QUESTION_TYPES = {
     creatable: true,
     also_accepts: 'Likert',
     required: ['type', 'instructions', 'scale_type'],
-    optional: ['custom_choices', 'asset_id', 'disable_instruction_card'],
+    optional: ['custom_choices', 'asset_id', 'disable_instruction_card', 'display_seconds'],
     scale_types: [
       'agreement',
       'occurrence',
@@ -102,7 +117,7 @@ export const QUESTION_TYPES = {
     creatable: true,
     also_accepts: 'NPS',
     required: ['type', 'instructions'],
-    optional: ['asset_id', 'disable_instruction_card'],
+    optional: ['asset_id', 'disable_instruction_card', 'display_seconds'],
     example: {
       type: 'nps',
       instructions: 'How likely are you to recommend us to a friend?',
@@ -117,7 +132,7 @@ export const QUESTION_TYPES = {
     creatable: true,
     also_accepts: 'Ranking',
     required: ['type', 'instructions', 'choices'],
-    optional: ['asset_id', 'disable_instruction_card'],
+    optional: ['asset_id', 'disable_instruction_card', 'display_seconds'],
     example: {
       type: 'ranking',
       instructions: 'Rank these features by importance',
@@ -150,7 +165,7 @@ export const QUESTION_TYPES = {
     creatable: true,
     also_accepts: 'Matrix',
     required: ['type', 'instructions', 'choices', 'categories'],
-    optional: ['asset_id', 'disable_instruction_card'],
+    optional: ['asset_id', 'disable_instruction_card', 'display_seconds'],
     example: {
       type: 'matrix',
       instructions: 'Rate each feature',
@@ -204,7 +219,7 @@ export const QUESTION_TYPES = {
     creatable: true,
     also_accepts: 'MaxDiff',
     required: ['type', 'instructions', 'choices'],
-    optional: ['asset_id', 'disable_instruction_card'],
+    optional: ['asset_id', 'disable_instruction_card', 'display_seconds'],
     example: {
       type: 'max_diff',
       instructions: 'Choose the most and least important',
@@ -218,7 +233,7 @@ export const QUESTION_TYPES = {
     creatable: true,
     also_accepts: 'PointAllocation',
     required: ['type', 'instructions', 'choices'],
-    optional: ['points', 'points_label', 'asset_id', 'disable_instruction_card'],
+    optional: ['points', 'points_label', 'asset_id', 'disable_instruction_card', 'display_seconds'],
     example: {
       type: 'point_allocation',
       instructions: 'Distribute 100 points across these features',
@@ -262,6 +277,8 @@ export interface TestShowResponse {
    * so gate rendering on `'ux_metrics' in test`, not truthiness.
    */
   ux_metrics?: UxMetricSummaryEntry[];
+  /** Devices the test recruits on. Present since the 2026-09-19 API release. */
+  devices?: string[];
   [key: string]: unknown;
 }
 
@@ -322,6 +339,8 @@ export interface SectionData {
   variations: VariationData[];
   /** "Skip question introduction" in the editor: no instruction card before the question. */
   disable_instruction_card?: boolean;
+  /** "Image Display Time": seconds the image shows before the question. Omitted when untimed. */
+  display_seconds?: number;
   /** Read-back of what `branching` writes. Omitted when the section has none. */
   branching?: BranchingData[];
   /** Click sections only. Empty array = engagement heatmap, no hotspot scoring. */
@@ -807,10 +826,25 @@ export function sectionStimulusLines(s: SectionData): string[] {
       lines.push(`      \x1b[90m→ ${variation.site_link}\x1b[0m`);
     }
   }
+  const seconds = sectionDisplaySeconds(s);
+  if (seconds != null) {
+    lines.push(`      \x1b[90m⏱ image shown for ${seconds}s, then hidden and the question revealed\x1b[0m`);
+  }
   if (s.disable_instruction_card) {
     lines.push('      \x1b[90mⓘ skips the question introduction — opens straight on the stimulus and answers\x1b[0m');
   }
   return lines;
+}
+
+/**
+ * The image display timer, or null when the image always shows. Only read on
+ * the types whose take screens honour it: a timer left on a preference section
+ * by the editor's old control is inert, and reporting it would mislead.
+ */
+function sectionDisplaySeconds(s: SectionData): number | null {
+  const canonical = RAW_TYPE_TO_CANONICAL[s.type] ?? s.type;
+  if (!TIMED_QUESTION_TYPES.has(canonical)) return null;
+  return typeof s.display_seconds === 'number' ? s.display_seconds : null;
 }
 
 /**
@@ -1044,6 +1078,8 @@ export function buildQuestionsFromSections(sections: SectionData[] | undefined):
         // would reject it, so it is left out rather than emitted as null.
         ...(STIMULUS_ASSET_TYPES.has(canonical) ? { asset_id: s.variations?.[0]?.asset_id ?? null } : {}),
         disable_instruction_card: s.disable_instruction_card === true,
+        // Same rule for the timer: only where a write would accept it.
+        ...(TIMED_QUESTION_TYPES.has(canonical) ? { display_seconds: sectionDisplaySeconds(s) } : {}),
         // Metric-owned questions are auto-generated and structurally locked —
         // agents must not treat them as editable hand-written questions.
         ...(metric ? { ux_metric: { id: metric.id, type: metric.type } } : {}),
@@ -1074,6 +1110,7 @@ export function mergeSectionFieldsIntoReportQuestions(
       ...q,
       ...(STIMULUS_ASSET_TYPES.has(canonical) ? { asset_id: s.variations?.[0]?.asset_id ?? null } : {}),
       disable_instruction_card: s.disable_instruction_card === true,
+      ...(TIMED_QUESTION_TYPES.has(canonical) ? { display_seconds: sectionDisplaySeconds(s) } : {}),
     };
   });
 }
@@ -1103,6 +1140,15 @@ export function parsePositiveInt(value: string | undefined, flagName: string): n
     throw new Error(`${flagName} must be a positive integer, got "${value}"`);
   }
   return n;
+}
+
+/**
+ * --display-seconds sends a number, as questions JSON would. Anything that
+ * isn't an integer passes through as typed, so validateQuestions reports it in
+ * the same shape as a bad value in JSON.
+ */
+function parseDisplaySecondsFlag(value: string): number | string {
+  return /^\s*\d+\s*$/.test(value) ? Number(value) : value;
 }
 
 function progressBar(percent: number, width = 15): string {
@@ -1152,6 +1198,7 @@ interface QuestionInput {
   random_category_order?: boolean;
   can_skip_cards?: boolean;
   disable_instruction_card?: boolean | null;
+  display_seconds?: unknown;
   position?: number;
   followup?: FollowupInput;
   hotspots?: unknown[];
@@ -1495,6 +1542,15 @@ function validateUxMetricSectionOverrides(
       continue;
     }
 
+    // The metric template builder never reads it, so the API would drop it.
+    if (overrides.display_seconds != null) {
+      errors.push({
+        question: 0,
+        field: `${sectionField}.display_seconds`,
+        message: 'The image display timer is not applied to UX metric sections through the API — set it in the Helio editor',
+      });
+    }
+
     if (overrides.hotspots !== undefined) {
       if (!clickSections.includes(s)) {
         errors.push({
@@ -1788,6 +1844,8 @@ export function validateQuestions(
       errors.push({ question: num, field: 'disable_instruction_card', message: 'Must be true or false' });
     }
 
+    validateDisplaySeconds(q, canonical, num, errors);
+
     // Type-specific validation
     if (canonical === 'multiple_choice') {
       if (!Array.isArray(q.choices) || q.choices.length < 2) {
@@ -1959,6 +2017,45 @@ export function validateQuestions(
   }
 
   return errors;
+}
+
+/**
+ * The image display timer, in the order the API checks it: the type, then the
+ * duration, then an asset to hide. null means "always show the image" and is
+ * fine anywhere. Whether the asset is an image (video and audio 400) is left to
+ * the server, which can see it.
+ */
+function validateDisplaySeconds(q: QuestionInput, canonical: string, num: number, errors: ValidationError[]): void {
+  const raw = q.display_seconds;
+  if (raw == null) return;
+
+  if (!TIMED_QUESTION_TYPES.has(canonical)) {
+    errors.push({
+      question: num,
+      field: 'display_seconds',
+      message: `The image display timer is not supported on ${canonical} — its take screen never hides the image. It applies to ${[...TIMED_QUESTION_TYPES].join(', ')}`,
+    });
+    return;
+  }
+
+  // The API parses the raw value as an integer, so "10" counts and 10.0 doesn't.
+  const seconds =
+    typeof raw === 'number' ? raw : typeof raw === 'string' && /^\s*\d+\s*$/.test(raw) ? Number(raw) : NaN;
+  if (!(DISPLAY_SECONDS_OPTIONS as readonly number[]).includes(seconds)) {
+    errors.push({
+      question: num,
+      field: 'display_seconds',
+      message: 'Must be 5, 10 or 15 (seconds) — the only durations the editor can show — or null to always show the image',
+    });
+  }
+
+  if (!isPresent(q.asset_id)) {
+    errors.push({
+      question: num,
+      field: 'display_seconds',
+      message: 'Needs an image asset_id on the same question — the timer hides the image, so there has to be one',
+    });
+  }
 }
 
 /**
@@ -2341,6 +2438,37 @@ export function validateAudienceConfig(config: {
   return errors;
 }
 
+/** `--devices desktop mobile` and `--devices desktop,mobile` read the same. */
+export function parseDevices(values: string[]): string[] {
+  return values.flatMap(v => v.split(',')).map(v => v.trim()).filter(v => v !== '');
+}
+
+/**
+ * Device targeting applies to every audience type: the panel routes on it, and
+ * the take page turns away a participant on any other device, share link
+ * included. So the only checks are the vocabulary and that something is left —
+ * a test with no device is one nobody can take, and the API refuses it.
+ */
+export function validateDevices(devices: string[]): string[] {
+  if (devices.length === 0) {
+    return [`--devices needs at least one of ${DEVICES.join(', ')}`];
+  }
+  return devices
+    .filter(d => !(DEVICES as readonly string[]).includes(d))
+    .map(d => {
+      // The docs once listed an is_phone field; the public name is "mobile".
+      const hint = d === 'phone' ? ' (the API calls phones "mobile")' : '';
+      return `--devices: unknown device "${d}"${hint} — choose from ${DEVICES.join(', ')}`;
+    });
+}
+
+export function formatDevices(devices: string[]): string {
+  if (devices.length === 0) return 'none selected';
+  if (DEVICES.every(d => devices.includes(d))) return `all (${DEVICES.join(', ')})`;
+  const ordered = DEVICES.filter(d => devices.includes(d));
+  return ordered.length === 1 ? `${ordered[0]} only` : ordered.join(', ');
+}
+
 /**
  * A 502 from send means the Enroll platform rejected the quota (commonly an
  * audience too narrow to fill). The test stays draft and nothing is spent —
@@ -2406,6 +2534,8 @@ export type WalkthroughScreen =
       site_link?: string;
       /** The question opens straight on its stimulus and answers, with no introduction card first. */
       disable_instruction_card: boolean;
+      /** Seconds the image shows before it is hidden and the question revealed; omitted when untimed. */
+      display_seconds?: number;
       assets: WalkthroughAsset[];
       /**
        * Read-back of what `branching` writes; omitted when the section has none.
@@ -2522,6 +2652,7 @@ export function buildWalkthroughScreens(test: TestShowResponse): WalkthroughScre
       ux_metric: uxMetric,
       site_link: variation?.site_link || undefined,
       disable_instruction_card: s.disable_instruction_card === true,
+      display_seconds: sectionDisplaySeconds(s) ?? undefined,
       assets,
       branching: Array.isArray(s.branching) && s.branching.length
         ? s.branching.map(b => ({ ...b, target_q_number: branchTargetQNumber(b, qIndex) }))
@@ -2596,6 +2727,10 @@ function stimulusLines(screen: WalkthroughScreen): string[] {
   }
   if (screen.site_link) {
     lines.push(`  \x1b[90m🔗 ${screen.site_link}\x1b[0m`);
+  }
+  if (screen.display_seconds != null) {
+    // A flash test: the participant answers from memory, not a time limit.
+    lines.push(`  \x1b[90m⏱ image shown for ${screen.display_seconds}s, then hidden — the question appears after\x1b[0m`);
   }
   return lines;
 }
@@ -3070,6 +3205,7 @@ export function walkthroughScreenJson(screen: WalkthroughScreen): Record<string,
     ux_metric: screen.ux_metric ?? null,
     site_link: screen.site_link ?? null,
     disable_instruction_card: screen.disable_instruction_card,
+    display_seconds: screen.display_seconds ?? null,
     assets: screen.assets,
     branching: screen.branching ?? null,
     hotspots: screen.hotspots ?? null,
@@ -3388,6 +3524,8 @@ export function registerTestsCommand(program: Command): void {
             test: {
               ...meta,
               introduction: test.introduction ?? null,
+              // null = an API older than 2026-09-19, which doesn't say.
+              devices: Array.isArray(test.devices) ? test.devices : null,
             },
             questions: reportData?.questions_summary?.length
               ? mergeSectionFieldsIntoReportQuestions(reportData.questions_summary, test.sections)
@@ -3412,6 +3550,9 @@ export function registerTestsCommand(program: Command): void {
         }
         const responseCount = meta.responses_count ?? 0;
         console.log(`Responses: ${responseCount}`);
+        if (Array.isArray(test.devices)) {
+          console.log(`Devices: ${formatDevices(test.devices)}`);
+        }
         if (test.introduction) {
           console.log(`Intro: ${test.introduction}`);
         }
@@ -3493,6 +3634,10 @@ export function registerTestsCommand(program: Command): void {
       '--exclude-tests <ids...>',
       'Test ids whose participants must not take this one (panel audiences only; max 5, or 30 on internal_group accounts). Exclusion is symmetric, so a mutually exclusive set needs one entry per pair, not per test.',
     )
+    .option(
+      '--devices <names...>',
+      'Devices participants may take the test on: any of desktop, tablet, mobile (space- or comma-separated). Omit to allow all three.',
+    )
     .requiredOption('--target-audience-size <n>', 'Target number of responses')
     .option('--questions <json>', 'Questions as JSON array or @path/to/file.json')
     .option('--ux-metrics <types...>', 'UX metrics to add (auto-generates measurement questions; a type may be repeated, and each instance is scored separately). Click-backed and brand_score metrics need per-section overrides — see --ux-metrics-json.')
@@ -3521,12 +3666,16 @@ export function registerTestsCommand(program: Command): void {
 
         const audienceType: string = cmdOpts.audienceType ?? 'open';
         const demographics = cmdOpts.demographics ? parseJsonOrFile(cmdOpts.demographics) : undefined;
-        const audienceErrors = validateAudienceConfig({
-          audienceType,
-          audiences: cmdOpts.audiences,
-          demographics,
-          excludeTestIds: cmdOpts.excludeTests,
-        });
+        const devices = cmdOpts.devices ? parseDevices(cmdOpts.devices) : undefined;
+        const audienceErrors = [
+          ...validateAudienceConfig({
+            audienceType,
+            audiences: cmdOpts.audiences,
+            demographics,
+            excludeTestIds: cmdOpts.excludeTests,
+          }),
+          ...(devices ? validateDevices(devices) : []),
+        ];
         if (audienceErrors.length > 0) {
           throw new Error(audienceErrors.join('\n'));
         }
@@ -3585,6 +3734,7 @@ export function registerTestsCommand(program: Command): void {
           if (cmdOpts.audiences) summary.audiences = cmdOpts.audiences;
           if (demographics !== undefined) summary.demographics = demographics;
           if (cmdOpts.excludeTests) summary.exclude_test_ids = cmdOpts.excludeTests;
+          if (devices) summary.devices = devices;
           if (questions) {
             summary.questions = (questions as QuestionInput[]).map((q, i) => ({
               position: i + 1,
@@ -3643,6 +3793,7 @@ export function registerTestsCommand(program: Command): void {
             if (cmdOpts.excludeTests) {
               console.log(`  Excludes:      ${(cmdOpts.excludeTests as string[]).join(', ')}`);
             }
+            console.log(`  Devices:       ${formatDevices(devices ?? [...DEVICES])}`);
             console.log(`  Questions:     ${questionCount}`);
             if (uxMetricTypeNames.length > 0) {
               console.log(`  UX metrics:    ${uxMetricTypeNames.join(', ')} (${metricSectionCount} auto-generated sections)`);
@@ -3700,6 +3851,7 @@ export function registerTestsCommand(program: Command): void {
         if (cmdOpts.audiences) body.audiences = cmdOpts.audiences;
         if (demographics !== undefined) body.demographics = demographics;
         if (cmdOpts.excludeTests) body.exclude_test_ids = cmdOpts.excludeTests;
+        if (devices) body.devices = devices;
 
         const data = await client.post('tests', body);
         const createWarnings = [
@@ -3740,6 +3892,7 @@ export function registerTestsCommand(program: Command): void {
     .option('--site-link <url>', 'Site link URL (free_response and click_test only)')
     .option('--hotspots <json>', 'Hotspots as JSON array or @path/to/file.json (for click_test): [{name?, x, y, width, height, priority?}]')
     .option('--skip-question-intro', 'Skip the question introduction card, so participants open straight on the stimulus and answers (disable_instruction_card; "Skip question introduction" in the editor)')
+    .option('--display-seconds <seconds>', 'Image display timer: show the --asset-id image for 5, 10 or 15 seconds, then hide it and reveal the question (a flash test — not a limit on answering). Needs an image --asset-id; not on preference, card_sort or click_test.')
     .option('--branching <json>', 'Branching as JSON array or @file (single-select multiple_choice; requires a Helio Enterprise account): [{choice, action: skip_to_question|end_test, question?|section_id?, message?, redirect_url?}]. Skips are forward-only.')
     .option('--position <n>', 'Insert at this 1-based position (appends if omitted)')
     .option('--followup <text>', 'Follow-up question text')
@@ -3767,6 +3920,7 @@ export function registerTestsCommand(program: Command): void {
         if (cmdOpts.siteLink) question.site_link = cmdOpts.siteLink;
         if (cmdOpts.hotspots) question.hotspots = parseJsonOrFile(cmdOpts.hotspots) as unknown[];
         if (cmdOpts.skipQuestionIntro) question.disable_instruction_card = true;
+        if (cmdOpts.displaySeconds !== undefined) question.display_seconds = parseDisplaySecondsFlag(cmdOpts.displaySeconds);
         if (cmdOpts.branching) question.branching = parseJsonOrFile(cmdOpts.branching) as unknown[];
         if (cmdOpts.position) question.position = parsePositiveInt(cmdOpts.position, '--position');
         const followup = buildFollowupFromFlags(cmdOpts);
@@ -3834,6 +3988,7 @@ export function registerTestsCommand(program: Command): void {
     .option('--site-link <url>', 'Site link URL (free_response and click_test on a --type replacement; also a safe edit on a UX metric section)')
     .option('--skip-question-intro', 'Skip the question introduction card (disable_instruction_card). --type replacement only, and a replacement recreates the section, so pass it again to keep it.')
     .option('--no-skip-question-intro', 'Show the question introduction card (the default)')
+    .option('--display-seconds <seconds>', 'Image display timer (5, 10 or 15; needs an image --asset-id). --type replacement only, and a replacement recreates the section, so pass it again to keep the timer.')
     .option('--hotspots <json>', 'Hotspots as JSON array or @path/to/file.json, for a click_test question or a click section of a UX metric: [{name?, x, y, width, height, priority?}]. Replaces the existing set.')
     .option('--brand-choice <index>', '0-based index of the choice that is your brand (brand_score market recognition section only)')
     .option('--branching <json>', 'Branching as JSON array or @file (single-select multiple_choice; requires a Helio Enterprise account): [{choice, action: skip_to_question|end_test, question?|section_id?, message?, redirect_url?}]. Skips are forward-only.')
@@ -3868,6 +4023,7 @@ export function registerTestsCommand(program: Command): void {
         if (cmdOpts.siteLink) question.site_link = cmdOpts.siteLink;
         if (cmdOpts.hotspots) question.hotspots = parseJsonOrFile(cmdOpts.hotspots) as unknown[];
         if (cmdOpts.skipQuestionIntro !== undefined) question.disable_instruction_card = cmdOpts.skipQuestionIntro;
+        if (cmdOpts.displaySeconds !== undefined) question.display_seconds = parseDisplaySecondsFlag(cmdOpts.displaySeconds);
         if (cmdOpts.brandChoice !== undefined) {
           const parsed = Number(cmdOpts.brandChoice);
           if (!Number.isInteger(parsed) || parsed < 0) {
@@ -3912,6 +4068,11 @@ export function registerTestsCommand(program: Command): void {
           if (question.disable_instruction_card !== undefined) {
             throw new Error(
               '--skip-question-intro / --no-skip-question-intro need --type: the API ignores the introduction card setting on a UX metric section, so set that one in the Helio editor.',
+            );
+          }
+          if (question.display_seconds !== undefined) {
+            throw new Error(
+              '--display-seconds needs --type: the API ignores the image display timer on a UX metric section, so set that one in the Helio editor.',
             );
           }
           // UX metric section edit — reject structural flags
@@ -4252,6 +4413,10 @@ export function registerTestsCommand(program: Command): void {
       'Replace the exclusion list wholesale with these test ids (panel audiences only; max 5, or 30 on internal_group accounts). Unlike --audiences this does not need --audience-type — without one it applies to the audience the test already has.',
     )
     .option('--clear-exclude-tests', 'Clear the exclusion list. Always allowed, whatever the audience type or account.')
+    .option(
+      '--devices <names...>',
+      'Replace the device targeting: any of desktop, tablet, mobile (space- or comma-separated). Pass all three to allow every device again. Set it before `tests send` — the panel reads it at send time.',
+    )
     .action(
       withErrorHandling(async (id: string, cmdOpts) => {
         const client = makeClient(program);
@@ -4300,9 +4465,19 @@ export function registerTestsCommand(program: Command): void {
         if (cmdOpts.clearExcludeTests) body.exclude_test_ids = [];
         else if (cmdOpts.excludeTests) body.exclude_test_ids = cmdOpts.excludeTests;
 
+        // A list replaces the set; leaving the flag off leaves targeting alone.
+        const devices = cmdOpts.devices ? parseDevices(cmdOpts.devices) : undefined;
+        if (devices) {
+          const deviceErrors = validateDevices(devices);
+          if (deviceErrors.length > 0) {
+            throw new Error(deviceErrors.join('\n'));
+          }
+          body.devices = devices;
+        }
+
         if (Object.keys(body).length === 0) {
           throw new Error(
-            'At least one field is required: --name, --intro, --target-audience-size, --audience-type, --exclude-tests, or --clear-exclude-tests',
+            'At least one field is required: --name, --intro, --target-audience-size, --audience-type, --exclude-tests, --clear-exclude-tests, or --devices',
           );
         }
 
@@ -4318,6 +4493,8 @@ export function registerTestsCommand(program: Command): void {
           };
           console.log(`\x1b[32m✓\x1b[0m Test updated`);
           printKeyValue(rest);
+          // The response doesn't echo devices; a 200 means the set was taken.
+          if (devices) console.log(`  Devices: ${formatDevices(devices)}`);
           if (audience) {
             console.log();
             printAudience(audience);

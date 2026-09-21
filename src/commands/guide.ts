@@ -222,6 +222,16 @@ const GUIDE = `
     \x1b[1mtests validate\x1b[0m reports it as a launch blocker. --choices is
     still accepted as a legacy alias; passing both is an error.
 
+  A flash test — show the image briefly, then hide it and ask what stuck:
+    $ helio-cli tests add-question <test-uuid> \\
+        --type multiple_choice --instructions "What was the page selling?" \\
+        --choices "Shoes" "Insurance" "Travel" \\
+        --asset-id <image-asset-id> --display-seconds 5
+
+    --display-seconds takes 5, 10 or 15 and needs an image --asset-id. It is
+    how long the image stays up, not a limit on answering. Not on preference,
+    card_sort or click_test.
+
   Edit or remove questions on a draft:
     $ helio-cli tests edit-question <test-uuid> <section-uuid> \\
         --type free_response --instructions "Updated question text"
@@ -303,6 +313,13 @@ const GUIDE = `
     exclusions beta flag; --clear-exclude-tests is exempt from all of it, so a
     test can always be undone. Unlike --audiences, --exclude-tests does not
     need --audience-type: without one it applies to the audience already there.
+
+  Limit which devices can take the test (default: all three):
+    $ helio-cli tests create ... --devices desktop
+    $ helio-cli tests update <test-uuid> --devices desktop tablet
+
+    Any of desktop, tablet, mobile. The panel recruits only on those, and the
+    take page turns away anyone on another device — share links included.
 
   Or retarget an existing draft (the clone-then-retarget flow):
     $ helio-cli tests clone <test-uuid>
@@ -489,7 +506,7 @@ export const GUIDE_JSON = {
         preference_note:
           "A preference question's options come back under `variations` (each {name, asset_id, has_asset, site_link}), not `choices` — that is what they are and what a write takes, so preview output feeds straight back into create/add-question. Options with no image are flagged as launch blockers.",
         args: '<id>',
-        note: 'Use this to verify a test looks correct before launching.',
+        note: 'Use this to verify a test looks correct before launching. Reads back device targeting (test.devices in JSON; null against an API older than 2026-09-19) and each question\'s image display timer (display_seconds, on the types that take one).',
       },
       walkthrough: {
         description: 'Step through a test screen-by-screen the way a participant sees it',
@@ -497,7 +514,7 @@ export const GUIDE_JSON = {
         options: {
           '--interactive': 'Prompt one screen at a time, capture answers, print recap (TTY required). Type "back" / "quit" to navigate.',
         },
-        note: 'Complements preview: preview is a flat structural summary, walkthrough renders each participant screen separately (intro + per-question UI). Stimulus assets are shared per screen: signed image URLs print inline (🖼) and each screen carries assets: [{variation_id, variation_name, asset_id, type, status, url, thumb_url}] plus site_link in JSON output (status "processing" means the upload is attached but not yet visible to participants). Asset-heavy types (prototype_task, click_test, tree_test) still render a placeholder pointing to the Helio browser preview, but include their asset URLs. With --output json, emits { test, screens: [...] }. Preference screens also carry preference_options: [{name, asset_id, has_asset, site_link}] (null on every other type) — has_asset false means an empty image slot, which is a launch blocker, and both the rendered screen and the JSON say so.',
+        note: 'Complements preview: preview is a flat structural summary, walkthrough renders each participant screen separately (intro + per-question UI). Stimulus assets are shared per screen: signed image URLs print inline (🖼) and each screen carries assets: [{variation_id, variation_name, asset_id, type, status, url, thumb_url}] plus site_link in JSON output (status "processing" means the upload is attached but not yet visible to participants). Asset-heavy types (prototype_task, click_test, tree_test) still render a placeholder pointing to the Helio browser preview, but include their asset URLs. With --output json, emits { test, screens: [...] }. Preference screens also carry preference_options: [{name, asset_id, has_asset, site_link}] (null on every other type) — has_asset false means an empty image slot, which is a launch blocker, and both the rendered screen and the JSON say so. display_seconds on each screen is the image display timer (null when the image always shows).',
       },
       participants: {
         description: "Per-respondent journeys — each person's answers stitched together in order, with the follow-up why and its sentiment attached to each rating",
@@ -517,7 +534,7 @@ export const GUIDE_JSON = {
         one_of_required: ['--ux-metrics <types...>', '--ux-metrics-json <json>', '--questions <json>'],
         recommended_shape: 'Lead with --ux-metrics (scored, validated sections) and use --questions only for what no metric covers. See ux_metrics.why_metrics_first and ux_metrics.starting_stacks.',
         project: 'Provide either --project-id <uuid> or --project-name <name> (resolved to UUID)',
-        optional: ['--audience-type <type> (default: open)', '--audiences <ids...>', '--demographics <json>', '--exclude-tests <ids...>', '--ux-metrics <types...>', '--ux-metrics-json <json>', '--ux-metric-context <text>', '--dry-run'],
+        optional: ['--audience-type <type> (default: open)', '--audiences <ids...>', '--demographics <json>', '--exclude-tests <ids...>', '--devices <names...>', '--ux-metrics <types...>', '--ux-metrics-json <json>', '--ux-metric-context <text>', '--dry-run'],
         audience_types: {
           open: 'Share-link recruiting; --audiences and --demographics are not accepted',
           basic: 'Helio panel, no filters',
@@ -526,6 +543,7 @@ export const GUIDE_JSON = {
           customer_list: 'Your customer lists via --audiences (required; ids from `audiences list`)',
         },
         exclude_tests_note: '--exclude-tests <ids...> keeps anyone who took those tests out of this one, so a set of cells never shares participants. Values are test uuids (a report_uuid also resolves) on your own account. Panel audiences only (basic, targeted, advanced), at most 5 per test (30 on internal_group accounts), and the account needs the exclusions beta flag — the CLI checks the panel rule locally and warns about the other two, which only the server can see. Exclusion is SYMMETRIC (a test also excludes anyone who took a test naming it), so a mutually exclusive set of N tests needs one entry per pair, not N-1 entries per test.',
+        devices_note: '--devices <names...> limits the test to some of desktop, tablet, mobile (space- or comma-separated); omit it and the test runs on all three. The panel routes participants by it, and the take page turns away anyone on another device — share-link tests included. Since the 2026-09-19 API release; tests preview reads it back.',
         dry_run: 'Validates questions, ux-metrics and the audience config locally and shows estimated answer spend without creating the test.',
         questions_format: 'JSON array or @path/to/file.json',
         ux_metrics_note: 'Auto-generates standardized measurement questions that return a 0-100 score with a threshold label. Can be used with or without --questions; prefer a metric over hand-writing its lookalike.',
@@ -572,6 +590,7 @@ export const GUIDE_JSON = {
           '--asset-id <id>': 'Stimulus shown with the question (image, video or audio asset) on free_response, multiple_choice, likert, nps, ranking, matrix, point_allocation and max_diff; an image is required for click_test. Rejected on preference (asset_id goes on each option in --variations) and card_sort (no stimulus slot).',
           '--site-link <url>': 'Saved on free_response and click_test only; rejected elsewhere, where the API drops it.',
           '--skip-question-intro': 'Skip the question introduction card (disable_instruction_card, "Skip question introduction" in the editor): participants open straight on the stimulus and answers. Any type.',
+          '--display-seconds <seconds>': 'Image display timer (display_seconds): show the --asset-id image for 5, 10 or 15 seconds, then hide it and reveal the question — a flash test, not an answer time limit. Needs an image --asset-id; rejected on preference, card_sort and click_test.',
           '--followup <text>': 'Attach a follow-up question',
           '--followup-required': 'Mark the follow-up as required (needs --followup)',
           '--followup-for-choices <positions...>': '0-based choice positions that trigger the follow-up (multiple choice / likert only; needs --followup)',
@@ -600,12 +619,13 @@ export const GUIDE_JSON = {
             options: {
               '--asset-id <id>': 'Stimulus shown with the question — same types as add-question',
               '--skip-question-intro / --no-skip-question-intro': 'Skip or show the question introduction card (disable_instruction_card). The replacement recreates the section, so an omitted flag resets it to shown.',
+              '--display-seconds <seconds>': 'Image display timer (5, 10 or 15; needs an image --asset-id). The replacement rebuilds the question, so an omitted flag turns the timer off.',
             },
           },
           ux_metric_section: {
             description: 'Safe edit on a UX metric section (omit --type)',
             allowed: ['--instructions <text>', '--asset-id <id>', '--site-link <url>', '--choices <items...> (choice text on multiple choice / likert sections; count must match — intent may resize down to 3)', '--randomize-choices / --no-randomize-choices', '--followup <text> (+ --followup-required / --followup-for-choices)', '--remove-followup'],
-            note: 'Structural flags (--scale-type, --categories, --points, etc.) are rejected. NPS choices (the 0-10 scale) are locked. --skip-question-intro is rejected too: the API ignores the introduction card setting on a metric section, so set it in the Helio editor.',
+            note: 'Structural flags (--scale-type, --categories, --points, etc.) are rejected. NPS choices (the 0-10 scale) are locked. --skip-question-intro and --display-seconds are rejected too: the API ignores the introduction card and the image display timer on a metric section, so set those in the Helio editor.',
           },
         },
         followup_options: {
@@ -626,7 +646,7 @@ export const GUIDE_JSON = {
           point_allocation: ['--choices <items...> (min 2)', '--points <n>', '--points-label <label>', '--asset-id <id>'],
           max_diff: ['--choices <items...> (min 4)', '--asset-id <id>'],
         },
-        note: 'Destroys and recreates the section at the same position — including its introduction card setting, so pass --skip-question-intro again to keep it.',
+        note: 'Destroys and recreates the section at the same position — including its introduction card setting and image display timer, so pass --skip-question-intro / --display-seconds again to keep them.',
       },
       'remove-question': {
         description: 'Remove a question from a draft test',
@@ -641,9 +661,10 @@ export const GUIDE_JSON = {
       update: {
         description: 'Update a draft test, or replace its audience (clone-then-retarget flow)',
         args: '<id>',
-        optional: ['--name <name>', '--intro <text>', '--target-audience-size <n>', '--audience-type <type>', '--audiences <ids...>', '--demographics <json>', '--exclude-tests <ids...>', '--clear-exclude-tests'],
+        optional: ['--name <name>', '--intro <text>', '--target-audience-size <n>', '--audience-type <type>', '--audiences <ids...>', '--demographics <json>', '--exclude-tests <ids...>', '--clear-exclude-tests', '--devices <names...>'],
         audience_note: '--audience-type replaces the pending quota wholesale (size carries over unless --target-audience-size is also passed); --audiences/--demographics require it. Same audience type vocabulary as create. Non-draft tests 422.',
         exclude_tests_note: '--exclude-tests replaces the exclusion list wholesale and, unlike --audiences, does NOT need --audience-type — without one it applies to the audience the test already has (so the panel-only rule is checked by the server, not the CLI). --clear-exclude-tests sends [], which is exempt from every gate, so a test can always be undone. Same cap and symmetry rules as create.',
+        devices_note: '--devices replaces the device set (any of desktop, tablet, mobile); omit it to leave targeting alone, and pass all three to allow every device again. Draft only — set it before send, which is when the panel reads it.',
       },
       responses: { description: 'Get all responses', args: '<id>' },
       report: {
@@ -745,16 +766,16 @@ export const GUIDE_JSON = {
   },
   question_types: {
     creatable: {
-      free_response: { also_accepts: 'FreeResponse', required: ['type', 'instructions'], optional: ['asset_id', 'site_link', 'disable_instruction_card'] },
-      multiple_choice: { also_accepts: 'MultipleChoice', required: ['type', 'instructions', 'choices (min 2)'], optional: ['allow_multiple', 'randomize_choices', 'asset_id', 'disable_instruction_card'] },
+      free_response: { also_accepts: 'FreeResponse', required: ['type', 'instructions'], optional: ['asset_id', 'site_link', 'disable_instruction_card', 'display_seconds'] },
+      multiple_choice: { also_accepts: 'MultipleChoice', required: ['type', 'instructions', 'choices (min 2)'], optional: ['allow_multiple', 'randomize_choices', 'asset_id', 'disable_instruction_card', 'display_seconds'] },
       likert: {
         also_accepts: 'Likert',
         required: ['type', 'instructions', 'scale_type'],
-        optional: ['custom_choices (required when scale_type=custom)', 'asset_id', 'disable_instruction_card'],
+        optional: ['custom_choices (required when scale_type=custom)', 'asset_id', 'disable_instruction_card', 'display_seconds'],
         scale_types: ['agreement', 'occurrence', 'importance', 'quality', 'comprehension', 'impression', 'expectations', 'usefulness', 'difficulty', 'likelihood', 'custom'],
       },
-      nps: { also_accepts: 'NPS', required: ['type', 'instructions'], optional: ['asset_id', 'disable_instruction_card'] },
-      ranking: { also_accepts: 'Ranking', required: ['type', 'instructions', 'choices (min 3)'], optional: ['asset_id', 'disable_instruction_card'] },
+      nps: { also_accepts: 'NPS', required: ['type', 'instructions'], optional: ['asset_id', 'disable_instruction_card', 'display_seconds'] },
+      ranking: { also_accepts: 'Ranking', required: ['type', 'instructions', 'choices (min 3)'], optional: ['asset_id', 'disable_instruction_card', 'display_seconds'] },
       preference: {
         also_accepts: 'Preference',
         required: ['type', 'instructions', 'variations (min 2)'],
@@ -766,16 +787,18 @@ export const GUIDE_JSON = {
         example:
           '[{"type":"preference","instructions":"Which do you prefer?","variations":[{"name":"Data In","asset_id":61016},{"name":"The Vertical","asset_id":61017,"site_link":"https://example.com"}]}]',
       },
-      matrix: { also_accepts: 'Matrix', required: ['type', 'instructions', 'choices (min 1)', 'categories (min 2)'], optional: ['asset_id', 'disable_instruction_card'] },
+      matrix: { also_accepts: 'Matrix', required: ['type', 'instructions', 'choices (min 1)', 'categories (min 2)'], optional: ['asset_id', 'disable_instruction_card', 'display_seconds'] },
       card_sort: { also_accepts: 'CardSort', required: ['type', 'instructions', 'choices (min 2)', 'categories (min 2)'], optional: ['random_category_order', 'can_skip_cards', 'disable_instruction_card'] },
-      point_allocation: { also_accepts: 'PointAllocation', required: ['type', 'instructions', 'choices (min 2)'], optional: ['points', 'points_label', 'asset_id', 'disable_instruction_card'] },
-      max_diff: { also_accepts: 'MaxDiff', required: ['type', 'instructions', 'choices (min 4)'], optional: ['asset_id', 'disable_instruction_card'] },
+      point_allocation: { also_accepts: 'PointAllocation', required: ['type', 'instructions', 'choices (min 2)'], optional: ['points', 'points_label', 'asset_id', 'disable_instruction_card', 'display_seconds'] },
+      max_diff: { also_accepts: 'MaxDiff', required: ['type', 'instructions', 'choices (min 4)'], optional: ['asset_id', 'disable_instruction_card', 'display_seconds'] },
     },
     read_only: ['click_test', 'tree_test', 'prototype_task'],
     asset_id_note:
       'A question-level asset_id is the stimulus shown with the question — the one upload slot (image, video or audio) on free_response, multiple_choice, likert, nps, ranking, matrix, point_allocation, max_diff and click_test (image only, required). It is rejected on preference (images go on each option in variations) and card_sort (no slot). Before the 2026-09-15 API release only free_response and click_test saved it; the other types took it and dropped it silently. site_link is saved on free_response and click_test only.',
     disable_instruction_card_note:
       'disable_instruction_card: true is "Skip question introduction" in the editor — the question opens straight on its stimulus and answers instead of showing the question text on a card of its own first. Any creatable type, on create, add-question and a --type edit-question replacement (which resets it unless passed again); not settable on a UX metric section. Must be a boolean.',
+    display_seconds_note:
+      'display_seconds is the editor\'s "Image Display Time": the participant sees the question\'s image for 5, 10 or 15 seconds, then it is hidden and the question is revealed — a flash test, NOT a limit on how long they may take to answer. null (or omitting it) always shows the image. Needs an IMAGE asset_id on the same question (video/audio 400). On free_response, multiple_choice, likert, nps, ranking, matrix, point_allocation and max_diff; preference, card_sort and click_test reject it, since their take screens never hide the image. Accepted on create, add-question and a --type edit-question replacement, which rebuilds the question — leave it out and the timer turns off. Not settable on a UX metric section. Since the 2026-09-19 API release; read back as display_seconds on the section (absent when untimed).',
   },
   ux_metrics: {
     description: 'UX metrics auto-generate standardized measurement questions when added to a test via --ux-metrics. Pick them before writing any question.',

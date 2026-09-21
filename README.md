@@ -168,7 +168,7 @@ helio-cli tests participants <test-uuid> --group-by cohort    # cluster by cohor
 helio-cli tests participants <test-uuid> --sentiment negative --output json
 ```
 
-`preview` is a structural summary (every question on one page), and it reads back everything a scripted build writes, so a pre-launch review can verify its own work: the test's **audience** configuration, its **UX metrics** (which metric owns which questions, with the metric uuids that `reorder` and `remove-ux-metrics` accept), per-question **branching**, and click-test **hotspots**. Metric-owned questions are tagged inline (e.g. `— sentiment metric`) — they are auto-generated and structurally locked, so edit them through the metric, not as hand-written questions. `--output json` emits `ux_metrics`, `audience`, `branching` and `hotspots` blocks; `walkthrough` carries `branching` and `hotspots` on each screen. A click section with no hotspots is called out, since on a hotspot-scored metric that means it scores zero. `walkthrough` renders each participant screen separately — intro, then each question with its own input UI (radio buttons, text box, NPS row, etc.) — so you can comprehend the experience step by step. Asset-heavy types (prototypes, click tests, tree tests) render a placeholder pointing to the Helio browser preview.
+`preview` is a structural summary (every question on one page), and it reads back everything a scripted build writes, so a pre-launch review can verify its own work: the test's **audience** configuration and **device targeting**, its **UX metrics** (which metric owns which questions, with the metric uuids that `reorder` and `remove-ux-metrics` accept), per-question **branching**, stimulus, **image display timer** and skipped introduction card, and click-test **hotspots**. Metric-owned questions are tagged inline (e.g. `— sentiment metric`) — they are auto-generated and structurally locked, so edit them through the metric, not as hand-written questions. `--output json` emits `ux_metrics`, `audience`, `branching` and `hotspots` blocks; `walkthrough` carries `branching` and `hotspots` on each screen. A click section with no hotspots is called out, since on a hotspot-scored metric that means it scores zero. `walkthrough` renders each participant screen separately — intro, then each question with its own input UI (radio buttons, text box, NPS row, etc.) — so you can comprehend the experience step by step. Asset-heavy types (prototypes, click tests, tree tests) render a placeholder pointing to the Helio browser preview.
 
 `participants` is the report seen one respondent at a time: where `walkthrough` shows the empty test structure and `tests report` shows aggregates, `participants` stitches each person's answers together in order — the rating, the follow-up "why", and that answer's sentiment, plus demographics, audience type, and cohorts. It accepts the same demographic/segment/sentiment filters as `report`, supports `--group-by cohort|audience_type`, and emits flat `{ study, participants: [...] }` JSON for piping into `jq`. It's a convenience wrapper over `tests report --include participants`. Note: `cohorts` is empty for non-enroll recruits, and `sentiment` / prototype grade are eventually consistent — a `null` means "not computed yet" (shown as *pending*), never neutral.
 
@@ -197,6 +197,14 @@ helio-cli tests add-question <test-uuid> \
     --instructions "This label tells me what the button does." \
     --asset-id <asset-id> \
     --skip-question-intro
+
+# A flash test: show the image for 5 seconds, then hide it and ask
+helio-cli tests add-question <test-uuid> \
+    --type multiple_choice \
+    --instructions "What was the page selling?" \
+    --choices "Shoes" "Insurance" "Travel" \
+    --asset-id <image-asset-id> \
+    --display-seconds 5
 ```
 
 Uploads return immediately with `status: "processing"`; poll `assets get <asset-id>` until `status` is `complete` to get dimensions and URLs. Asset ids are numeric (unlike test/project uuids).
@@ -204,6 +212,8 @@ Uploads return immediately with `status: "processing"`; poll `assets get <asset-
 A question-level `--asset-id` is the stimulus shown with the question, and `free_response`, `multiple_choice`, `likert`, `nps`, `ranking`, `matrix`, `point_allocation`, `max_diff` and `click_test` all take one. Preference questions carry their images per option instead (`--variations`) and card sort has no stimulus slot, so both reject it. `--site-link` is saved on `free_response` and `click_test` only. Before the 2026-09-15 Public API release (zurb/helio#5039), only `free_response` and `click_test` saved an `asset_id` — the other types took it and silently dropped it — so check `tests preview`, which reads back each question's stimulus.
 
 `--skip-question-intro` sets `disable_instruction_card`, the editor's "Skip question introduction": the participant opens straight on the stimulus and answers instead of seeing the question text on its own card first. `edit-question --type` recreates the section, so pass the flag again to keep it; a UX metric section can't be given it through the API.
+
+`--display-seconds` (`display_seconds` in questions JSON) is the editor's "Image Display Time": the participant sees the question's image for 5, 10 or 15 seconds, then it is hidden and the question is revealed. It is how long the image stays up, **not** a limit on how long they have to answer. It needs an image `--asset-id` on the same question (a video or audio asset is rejected), and it applies to `free_response`, `multiple_choice`, `likert`, `nps`, `ranking`, `matrix`, `point_allocation` and `max_diff`. Preference, card sort and click test reject it, since their take screens never hide the image. As with the introduction card, `edit-question --type` rebuilds the question, so leaving the flag off turns the timer off, and a UX metric section can't be given one through the API. Needs the 2026-09-19 Public API release (zurb/helio#5048).
 
 ### Question Types
 
@@ -429,9 +439,17 @@ helio-cli tests create ... --audience-type basic \
     --exclude-tests <cell-a-uuid> <cell-b-uuid>
 helio-cli tests update <test-uuid> --exclude-tests <other-uuid>
 helio-cli tests update <test-uuid> --clear-exclude-tests
+
+# Limit which devices can take the test (default: all three)
+helio-cli tests create ... --devices desktop
+helio-cli tests update <test-uuid> --devices desktop tablet
 ```
 
 `--demographics` keys: `gender`, `age`, `income`, `education`, `continent`, `country` — values are string arrays. Required for `targeted`, optional for `advanced`, rejected elsewhere. `--audiences` is required for `advanced`/`customer_list` and rejected for the other types — including `open`, where the server would silently ignore it (the old trap: a test that looks fine and recruits nobody). On `tests update`, `--audience-type` replaces the pending quota wholesale; size carries over unless `--target-audience-size` is passed too. Audience changes are draft-only (running tests 422). Enroll rows in `audiences list` show `—` for participants/tests/last-used — a panel segment has no usage history in your account.
+
+#### Device targeting
+
+`--devices` takes any of `desktop`, `tablet` and `mobile` (space- or comma-separated); leave it off and the test runs on all three, which is what every API-built test did before the 2026-09-19 Public API release (zurb/helio#5048). The panel recruits only on the devices you name, and the take page turns away anyone on another device, share-link tests included. On `tests update` a list replaces the set and leaving the flag off leaves it alone; pass all three to allow every device again. Like every `update` field it is draft-only, so set it before `tests send`, which is when the panel reads it. `tests preview` reads it back (`test.devices` in JSON, `null` against an older API).
 
 #### Exclusions — keeping tests from sharing participants
 
