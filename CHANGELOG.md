@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.11.0
+
+Ships against the 2026-09-19 Public API release, zurb/helio#5048 (device
+targeting + the image display timer). Both were editor settings the API never
+exposed, so sessions kept reporting them as platform limits. An older API
+drops both fields without an error: `tests preview` only prints a Devices line,
+or a question's timer, when the API reads it back, so a missing line means the
+setting didn't land. Nothing that worked in 0.10.0 stops working, except the
+local rejections below. Each one was already a 400 or a silent drop.
+
+### Breaking (JSON output shape)
+- **`tests walkthrough --output json` gains `display_seconds`** on every
+  question screen (`null` when the image always shows).
+- **`tests preview --output json` gains `test.devices`** (`null` against an
+  API older than 2026-09-19), and **`display_seconds`** on each question of a
+  type that takes one. It's left out on preference, card sort and click test,
+  where a write would reject a value. Both are write keys, so preview output
+  still feeds straight back into `create` / `add-question`.
+
+### Added
+- **`--devices <names...>` on `tests create` and `tests update`**: any of
+  `desktop`, `tablet`, `mobile`, space- or comma-separated. Leave it off and
+  the test runs on all three, which is what every API-built test did until
+  now. The panel recruits only on those devices, and the take page turns away
+  anyone on another device (share links included). On `update` a list replaces
+  the set and leaving the flag off leaves it alone. `--dry-run` shows the
+  targeting.
+- **`--display-seconds <seconds>` on `tests add-question` and
+  `tests edit-question`**, and `display_seconds` in questions JSON: the
+  editor's "Image Display Time". The participant sees the question's image for
+  5, 10 or 15 seconds, then it is hidden and the question is revealed — a
+  flash test, not a limit on answering. It applies to `free_response`,
+  `multiple_choice`, `likert`, `nps`, `ranking`, `matrix`, `point_allocation`
+  and `max_diff`. An `edit-question --type` replacement rebuilds the question,
+  so the timer turns off unless passed again.
+- **Read-back.** `tests preview` prints the device targeting under the header
+  and each question's timer (in the Structure block too, for a test with report
+  data). `tests walkthrough` renders the timer on its screen.
+- `tests question-types` and `guide` list `display_seconds` per type, and
+  `guide` documents both flags.
+
+### Changed
+Local validation, so `--dry-run` catches what would be a 400 or a silent drop:
+- `display_seconds` on `preference`, `card_sort` or `click_test` is rejected,
+  as is any duration other than 5, 10 or 15, and a timer on a question with no
+  `asset_id`. `null` stays valid anywhere and means "always show". Whether the
+  asset is an image (video and audio 400) is left to the server.
+- `edit-question` without `--type` (a UX metric section edit) rejects
+  `--display-seconds`, and so does `display_seconds` in a `--ux-metrics-json`
+  section override: the API ignores the timer on metric sections, so it has to
+  be set in the editor.
+- An unknown `--devices` name is rejected with the valid list. `phone` gets a
+  pointer to `mobile`, the name the API uses.
+
 ## 0.10.0
 
 Ships against the 2026-09-15 Public API release, zurb/helio#5039 (question
