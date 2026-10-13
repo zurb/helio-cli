@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.9.1
+## 0.11.1
 
 ### Changed
 - **Hotspot guidance now states the click-tracking model.** Helio scores a
@@ -21,6 +21,126 @@
   hotspot-scored metric with no hotspots, a `brand_score` with no brand
   marked), and an unconditional warning on every click test would teach agents
   to skim past those.
+
+## 0.11.0
+
+Ships against the 2026-09-19 Public API release, zurb/helio#5048 (device
+targeting + the image display timer). Both were editor settings the API never
+exposed, so sessions kept reporting them as platform limits. An older API
+drops both fields without an error: `tests preview` only prints a Devices line,
+or a question's timer, when the API reads it back, so a missing line means the
+setting didn't land. Nothing that worked in 0.10.0 stops working, except the
+local rejections below. Each one was already a 400 or a silent drop.
+
+### Breaking (JSON output shape)
+- **`tests walkthrough --output json` gains `display_seconds`** on every
+  question screen (`null` when the image always shows).
+- **`tests preview --output json` gains `test.devices`** (`null` against an
+  API older than 2026-09-19), and **`display_seconds`** on each question of a
+  type that takes one. It's left out on preference, card sort and click test,
+  where a write would reject a value. Both are write keys, so preview output
+  still feeds straight back into `create` / `add-question`.
+
+### Added
+- **`--devices <names...>` on `tests create` and `tests update`**: any of
+  `desktop`, `tablet`, `mobile`, space- or comma-separated. Leave it off and
+  the test runs on all three, which is what every API-built test did until
+  now. The panel recruits only on those devices, and the take page turns away
+  anyone on another device (share links included). On `update` a list replaces
+  the set and leaving the flag off leaves it alone. `--dry-run` shows the
+  targeting.
+- **`--display-seconds <seconds>` on `tests add-question` and
+  `tests edit-question`**, and `display_seconds` in questions JSON: the
+  editor's "Image Display Time". The participant sees the question's image for
+  5, 10 or 15 seconds, then it is hidden and the question is revealed — a
+  flash test, not a limit on answering. It applies to `free_response`,
+  `multiple_choice`, `likert`, `nps`, `ranking`, `matrix`, `point_allocation`
+  and `max_diff`. An `edit-question --type` replacement rebuilds the question,
+  so the timer turns off unless passed again.
+- **Read-back.** `tests preview` prints the device targeting under the header
+  and each question's timer (in the Structure block too, for a test with report
+  data). `tests walkthrough` renders the timer on its screen.
+- `tests question-types` and `guide` list `display_seconds` per type, and
+  `guide` documents both flags.
+
+### Changed
+Local validation, so `--dry-run` catches what would be a 400 or a silent drop:
+- `display_seconds` on `preference`, `card_sort` or `click_test` is rejected,
+  as is any duration other than 5, 10 or 15, and a timer on a question with no
+  `asset_id`. `null` stays valid anywhere and means "always show". Whether the
+  asset is an image (video and audio 400) is left to the server.
+- `edit-question` without `--type` (a UX metric section edit) rejects
+  `--display-seconds`, and so does `display_seconds` in a `--ux-metrics-json`
+  section override: the API ignores the timer on metric sections, so it has to
+  be set in the editor.
+- An unknown `--devices` name is rejected with the valid list. `phone` gets a
+  pointer to `mobile`, the name the API uses.
+
+## 0.10.0
+
+Ships against the 2026-09-15 Public API release, zurb/helio#5039 (question
+stimulus assets + the question introduction card). Against an older API both
+new fields are still dropped without an error — `tests preview` now reads them
+back, so a drop is visible before launch. Nothing that worked in 0.9.0 stops
+working, except the local rejections below, each of which was already a silent
+drop or a 400.
+
+### Breaking (JSON output shape)
+- **`tests walkthrough --output json` gains `disable_instruction_card`** on
+  every question screen (`false` unless the introduction card is skipped).
+- **`tests preview --output json` gains `disable_instruction_card`** on every
+  question, and **`asset_id`** on the types that have a stimulus slot (left
+  out on preference and card sort, where a write would reject it). Both are
+  write keys, so preview output still feeds straight back into `create` /
+  `add-question`.
+
+### Added
+- **A stimulus on every single-variation question type.** `--asset-id` (and
+  `asset_id` in questions JSON) now lands on `multiple_choice`, `likert`,
+  `nps`, `ranking`, `matrix`, `point_allocation` and `max_diff`, not just
+  `free_response` and `click_test`. The editor has always had the upload slot;
+  the API took the field on these types with a 200 and dropped it, which read
+  as a platform limit.
+- **`--skip-question-intro`** on `tests add-question` and `tests edit-question`
+  (plus `--no-skip-question-intro` on edit), and `disable_instruction_card` in
+  questions JSON — the editor's "Skip question introduction": the participant
+  opens straight on the stimulus and answers instead of seeing the question
+  text on its own card first. An `edit-question --type` replacement recreates
+  the section, so the setting resets unless passed again.
+- **Read-back.** `tests preview` prints each question's stimulus asset, site
+  link, and a skipped introduction card. `tests walkthrough` renders a skipped
+  introduction card, and names a stimulus even when the payload carries only
+  its `asset_id` (previously an asset with no URL and no pending status
+  printed nothing).
+- `tests question-types` and `guide` list `asset_id` and
+  `disable_instruction_card` per type.
+
+### Changed
+Local validation, so `--dry-run` catches what was a silent drop or a 400:
+- A question-level `asset_id` on `preference` or `card_sort` is rejected —
+  preference is pointed at `asset_id` on each option in `variations`. This
+  matches the API's new 400.
+- A question-level `site_link` is rejected on every type but `free_response`
+  and `click_test`, the only ones whose sections save it.
+- A non-boolean `disable_instruction_card` is rejected.
+- `edit-question` without `--type` (a UX metric section edit) rejects
+  `--skip-question-intro` / `--no-skip-question-intro`: the API ignores the
+  setting on metric sections, so it has to be set in the editor.
+
+### Fixed
+Both found by running 0.10.0 against production, not the test suite:
+- **Sections named by their STI class are recognised.** `GET /tests/:id` calls a
+  section `MultipleChoiceSection`, `RankSection`, `NpsSection`, `ClickSection`
+  and so on, but the CLI only knew the `…DirectiveSection` spellings it had seen
+  in other payloads. Anything keyed off the question type fell through on real
+  tests: preference options read as empty, click/tree/prototype screens rendered
+  as if a participant could answer them inline, multiple choice lost its option
+  bullets, and the type printed as the raw class name.
+- **`tests preview` keeps the new fields on a test that has report data** —
+  which is every real test, a draft at 0 responses included. The report supplies
+  the questions and carries neither field, so `--output json` merges them in
+  from the sections (matched on position, and only when the two lists line up),
+  and the text view reports them in its Structure block.
 
 ## 0.9.0
 
