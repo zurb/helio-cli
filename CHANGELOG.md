@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.11.1
+
+### Changed
+- **Hotspot guidance now states the click-tracking model.** Helio scores a
+  click only when its absolute coordinates fall inside a hotspot rectangle —
+  nothing snaps to the nearest target — so a box drawn tight to the element
+  drops clicks that were plainly aimed at it and under-scores a design that
+  worked. Agents building click tests had no way to know this from the CLI, and
+  the fix is wording rather than validation: the CLI never sees the image, so
+  it cannot tell a padded box from a snug one, and box size is no signal either
+  (a large component needs the same slack as a small one). The rule, with its
+  reason, now appears in `tests question-types` (`click_test` notes), in
+  `guide --output json` (the `hotspots` override key), in the human-readable
+  `guide` click-metric section, and in the README.
+- **`tests preview` flags it per click section.** Sections that have hotspots
+  now print an informational line under the box list reminding a reviewer to
+  check the padding against the image. It is grey `ⓘ`, not a yellow `⚠` — the
+  warning channel is reserved for misconfiguration the CLI can prove (a
+  hotspot-scored metric with no hotspots, a `brand_score` with no brand
+  marked), and an unconditional warning on every click test would teach agents
+  to skim past those.
+
 ## 0.11.0
 
 Ships against the 2026-09-19 Public API release, zurb/helio#5048 (device

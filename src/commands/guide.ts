@@ -143,6 +143,12 @@ const GUIDE = `
     Hotspot coordinates are relative to the image (0-1); x/y are the top-left
     corner, and x + width / y + height must each stay within 1.
 
+    Clicks are tracked by absolute coordinates: a click scores only if it falls
+    inside a hotspot rectangle, and nothing snaps to the nearest target. Pad
+    each box out past the visual edges of the element or clicks plainly aimed
+    at it score as misses — and because the rule is about the gap between box
+    and element, a large component needs that slack as much as a small one.
+
   Add or remove UX metrics on an existing draft:
     $ helio-cli tests add-ux-metrics <test-uuid> --metrics comprehension loyalty
     $ helio-cli tests add-ux-metrics <test-uuid> --position 2 \\
@@ -826,7 +832,7 @@ export const GUIDE_JSON = {
     repeated_types: 'The same metric type may appear on a test more than once. Each instance owns its own sections and is scored independently, which is what a multi-screen flow measuring `expectations` on every screen needs. Consequence for reorder: a repeated type must be addressed as metric:<uuid>, since metric:<type> cannot say which instance you mean.',
     section_overrides: {
       note: 'Per-section overrides on the object form (--ux-metrics-json / --metrics-json). Keys: instructions, asset_id, site_link, followup, hotspots, choices, brand_choice. Overrides apply in template order — sections[0] is the metric\'s first section.',
-      hotspots: 'Click sections only: [{name?, x, y, width, height, priority?}] with coordinates relative to the image (0-1). x/y are the top-left corner, and x + width / y + height must each be at most 1. priority: Primary (default) | Secondary | Tertiary.',
+      hotspots: 'Click sections only: [{name?, x, y, width, height, priority?}] with coordinates relative to the image (0-1). x/y are the top-left corner, and x + width / y + height must each be at most 1. priority: Primary (default) | Secondary | Tertiary. Helio tracks clicks by absolute coordinates and scores a click only when it falls inside a hotspot rectangle, with no snapping to the nearest target — so pad each box out past the visual edges of the element, large components included, or clicks plainly aimed at it score as misses.',
       choices: 'Replaces a metric section\'s choice list at create time. Most metric choice lists are fixed length; brand_score sections[0] (market recognition) is resizable down to 2.',
       brand_choice: '0-based index of the choice that is your brand. brand_score sections[0] only — its recognition score is read off the flagged choice, so an unmarked list scores nothing.',
       click_backed_example: 'helio-cli tests create ... --ux-metrics-json \'[{"type":"success","sections":[{"asset_id":"<image asset>","instructions":"Click where you would check out.","hotspots":[{"name":"Checkout","x":0.4,"y":0.5,"width":0.2,"height":0.1}]}]}]\'',

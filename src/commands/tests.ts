@@ -188,7 +188,7 @@ export const QUESTION_TYPES = {
       hotspots: [{ name: 'Returns link', x: 0.1, y: 0.2, width: 0.3, height: 0.05, priority: 'Primary' }],
     },
     notes:
-      'asset_id is required (upload via `assets upload`). Omit hotspots for an engagement click test (heatmap only); include them for a success click test. Coordinates are relative (0-1). priority: Primary | Secondary | Tertiary (default Primary).',
+      'asset_id is required (upload via `assets upload`). Omit hotspots for an engagement click test (heatmap only); include them for a success click test. Coordinates are relative (0-1). priority: Primary | Secondary | Tertiary (default Primary). Helio tracks clicks by absolute coordinates and scores a click only when it falls inside a hotspot rectangle — nothing snaps to the nearest target — so pad each box out past the visual edges of the element, large components included, or clicks plainly aimed at it score as misses.',
     summary_fields: 'results: [{id, text, percent, count}]',
     response_fields: 'clicks: [{x, y}] (relative coordinates)',
   },
@@ -868,6 +868,10 @@ function printPreferenceOptions(options: PreferenceOption[]): void {
  * Hotspots are what a click-backed metric scores against, so "none" is the
  * finding worth surfacing: on a metric-owned click section it means the metric
  * scores zero, while on a standalone click test it just means engagement.
+ *
+ * Where boxes exist, the review question shifts to whether they are padded.
+ * Helio scores clicks by absolute coordinates with no snapping, so a box drawn
+ * tight to the element drops near misses and under-scores a design that worked.
  */
 function printHotspots(s: SectionData): void {
   if (!Array.isArray(s.hotspots)) return;
@@ -891,6 +895,11 @@ function printHotspots(s: SectionData): void {
       `        ${h.number}. ${name}${priority}  \x1b[90m${fmtBox(h)}\x1b[0m`,
     );
   }
+  // The CLI never sees the image, so it cannot tell a padded box from one drawn
+  // tight to the element. Size is no signal either — absolute tracking means a
+  // large component wants the same slack as a small one — so this is a reminder
+  // to check against the image, not a warning about these numbers.
+  console.log(`      \x1b[90mⓘ clicks are scored by absolute coordinates — check each box is padded out past the element, or near misses score as misses\x1b[0m`);
 }
 
 function fmtBox(h: HotspotData): string {
