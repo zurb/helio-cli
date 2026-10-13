@@ -311,7 +311,7 @@ helio-cli tests edit-question <test-uuid> <section-uuid> --brand-choice 0
 helio-cli tests validate <test-uuid>
 ```
 
-Hotspot coordinates are relative to the image (0–1); `x`/`y` are the top-left corner, and `x + width` / `y + height` must each stay within 1. `create` and `add-ux-metrics` warn when a metric is missing its overrides; `validate` refuses to pass one.
+Hotspot coordinates are relative to the image (0–1); `x`/`y` are the top-left corner, and `x + width` / `y + height` must each stay within 1. Clicks are tracked by **absolute coordinates** — a click scores only if it falls inside a hotspot rectangle, and nothing snaps to the nearest target — so **pad each box out past the visual edges of the element**, or clicks plainly aimed at it score as misses. The rule is about the gap between box and element, not hotspot size: a large component needs that slack as much as a small one. `create` and `add-ux-metrics` warn when a metric is missing its overrides; `validate` refuses to pass one.
 
 Per-section override keys: `instructions`, `asset_id`, `site_link`, `followup`, `hotspots`, `choices`, `brand_choice`. Overrides apply in template order, so `sections[0]` is the metric's first section. Most metric choice lists are fixed length; `brand_score`'s market recognition list (`sections[0]`) is resizable down to 2.
 
