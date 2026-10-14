@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.12.0
+
+Ships against zurb/helio#5043 (project create + rename), ZURB-4294.
+
+### Added
+- **`projects create`.** `--name` (required, unique in the account),
+  `--tags <tags...>`, and `--account-id` for ZURB tokens creating a project in
+  a client account. The returned `id` is the `--project-id` for `tests create`,
+  so a script no longer has to leave the CLI to make a project first.
+- **`projects update <id>`.** Rename with `--name`, replace tags with
+  `--tags <tags...>`, or remove them with `--clear-tags`. Tags replace the
+  whole list. They don't append, which is how the API's `PATCH` works.
+- Tags longer than 33 characters (Helio's limit) are rejected before the
+  request, rather than coming back as a 422.
+- Both commands appear in `guide` and `guide --output json`. Deleting a
+  project and moving a test between projects are still not in the API.
+
 ## 0.11.1
 
 ### Changed
