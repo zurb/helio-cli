@@ -33,6 +33,11 @@ const GUIDE = `
     $ helio-cli projects list --name "UX Research"
     $ helio-cli p list                     # shorthand alias
 
+  Create or rename a project:
+    $ helio-cli projects create --name "Checkout redesign" --tags ux q4
+    $ helio-cli projects update <project-uuid> --name "Checkout v2"
+    $ helio-cli projects update <project-uuid> --tags ux   # replaces all tags
+
   List tests (with filters):
     $ helio-cli tests list
     $ helio-cli tests list --status running
@@ -461,7 +466,7 @@ export const GUIDE_JSON = {
   overview: 'Helio CLI wraps the Helio Public API. All commands accept --output json for machine-readable output.',
   recommended_workflow: [
     '1. helio-cli auth login                              # authenticate',
-    '2. helio-cli projects list --output json              # find your project',
+    '2. helio-cli projects list --output json              # find your project (or: projects create --name ...)',
     '3. helio-cli tests ux-metric-types --output json      # pick metrics FIRST — they build validated, scored sections',
     '4. helio-cli tests create --dry-run ...               # validate before creating',
     '5. helio-cli tests create ...                         # create draft (--ux-metrics first, --questions for the rest)',
@@ -711,6 +716,18 @@ export const GUIDE_JSON = {
       list: { description: 'List all projects', options: { '--name': 'Filter by name (case-insensitive partial match)' } },
       get: { description: 'Get project details', args: '<id>' },
       tests: { description: 'List tests in a project', args: '<project-id>' },
+      create: {
+        description: 'Create a project; the returned id is the --project-id for tests create',
+        required: ['--name'],
+        optional: ['--tags <tags...>', '--account-id'],
+        notes: 'Name must be unique in the account (422 otherwise). Tags max 33 characters each. --account-id creates the project in another account the token has access to; without it the project goes in the token home account.',
+      },
+      update: {
+        description: 'Rename a project or replace its tags',
+        args: '<project-id>',
+        optional: ['--name', '--tags <tags...>', '--clear-tags'],
+        notes: '--tags replaces the whole tag list; it does not append. Deleting projects and moving tests between projects are not available in the API.',
+      },
     },
     participants: {
       list: { description: 'List participants', options: { '--page': 'Page', '--per': 'Per page', '--with-views': '', '--with-responses': '' } },

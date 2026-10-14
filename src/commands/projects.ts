@@ -25,6 +25,67 @@ function formatDate(iso: string): string {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
+// ─── Write payloads ──────────────────────────────────────────────────────────
+// POST /projects and PATCH /projects/:id both take {name, tags}. Tags replace
+// the whole list on update, and Helio caps each at 33 characters — checked
+// here so a long tag fails before the request rather than as a 422.
+
+const MAX_TAG_LENGTH = 33;
+
+function normalizeTags(tags: string[]): string[] {
+  const cleaned = tags.map((t) => t.trim()).filter(Boolean);
+  const tooLong = cleaned.filter((t) => t.length > MAX_TAG_LENGTH);
+  if (tooLong.length) {
+    throw new Error(
+      `Tags can be at most ${MAX_TAG_LENGTH} characters: ${tooLong.map((t) => `"${t}"`).join(', ')}`,
+    );
+  }
+  return cleaned;
+}
+
+export function buildProjectCreateBody(opts: {
+  name?: string;
+  tags?: string[];
+  accountId?: string;
+}): Record<string, unknown> {
+  const name = opts.name?.trim();
+  if (!name) throw new Error('--name is required');
+  const body: Record<string, unknown> = { name };
+  if (opts.tags) body.tags = normalizeTags(opts.tags);
+  if (opts.accountId) body.account_id = opts.accountId;
+  return body;
+}
+
+export function buildProjectUpdateBody(opts: {
+  name?: string;
+  tags?: string[];
+  clearTags?: boolean;
+}): Record<string, unknown> {
+  if (opts.tags && opts.clearTags) throw new Error('Pass --tags or --clear-tags, not both');
+  const body: Record<string, unknown> = {};
+  if (opts.name !== undefined) {
+    const name = opts.name.trim();
+    if (!name) throw new Error('--name cannot be blank');
+    body.name = name;
+  }
+  if (opts.tags) body.tags = normalizeTags(opts.tags);
+  if (opts.clearTags) body.tags = [];
+  if (!Object.keys(body).length) {
+    throw new Error('Nothing to update — pass --name, --tags, or --clear-tags');
+  }
+  return body;
+}
+
+function printProject(project: ProjectListItem): void {
+  printKeyValue({
+    id: project.id,
+    name: project.name,
+    tags: project.tags?.length ? project.tags.join(', ') : '—',
+    tests_count: project.tests_count,
+    created_at: project.created_at,
+  });
+}
+
 function formatProjectRow(p: ProjectListItem): string {
   const tags = p.tags?.length ? ` \x1b[90m[${p.tags.join(', ')}]\x1b[0m` : '';
   const tests = `${p.tests_count} test${p.tests_count === 1 ? '' : 's'}`;
@@ -77,6 +138,46 @@ export function registerProjectsCommand(program: Command): void {
           printJson(data);
         } else {
           printKeyValue(data.project);
+        }
+      }),
+    );
+
+  cmd
+    .command('create')
+    .description('Create a project (its id is the --project-id for tests create)')
+    .requiredOption('--name <name>', 'Project name (must be unique in the account)')
+    .option('--tags <tags...>', `Project tags (max ${MAX_TAG_LENGTH} characters each)`)
+    .option('--account-id <id>', 'Create the project in this account instead of the token home account (for tokens with access to more than one account)')
+    .action(
+      withErrorHandling(async (cmdOpts) => {
+        const body = buildProjectCreateBody(cmdOpts);
+        const client = makeClient(program);
+        const data = (await client.post('projects', body)) as { project: ProjectListItem };
+        if (isJsonMode()) {
+          printJson(data);
+        } else {
+          console.log(`\x1b[32m✓\x1b[0m Created project \x1b[1m${data.project.name}\x1b[0m\n`);
+          printProject(data.project);
+        }
+      }),
+    );
+
+  cmd
+    .command('update <id>')
+    .description('Rename a project or replace its tags')
+    .option('--name <name>', 'New project name (must be unique in the account)')
+    .option('--tags <tags...>', 'Replacement tags — replaces the whole list, not appended')
+    .option('--clear-tags', 'Remove all tags')
+    .action(
+      withErrorHandling(async (id: string, cmdOpts) => {
+        const body = buildProjectUpdateBody(cmdOpts);
+        const client = makeClient(program);
+        const data = (await client.patch(`projects/${id}`, body)) as { project: ProjectListItem };
+        if (isJsonMode()) {
+          printJson(data);
+        } else {
+          console.log(`\x1b[32m✓\x1b[0m Updated project \x1b[1m${data.project.name}\x1b[0m\n`);
+          printProject(data.project);
         }
       }),
     );
