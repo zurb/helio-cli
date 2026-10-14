@@ -4,7 +4,7 @@ import { buildProjectCreateBody, buildProjectUpdateBody, registerProjectsCommand
 
 // ─── buildProjectCreateBody ──────────────────────────────────────────────────
 // POST /projects takes {name, tags, account_id}. Name is required and unique
-// per account; account_id is only honored for ZURB tokens.
+// per account; account_id targets another account the token can act on.
 
 describe('buildProjectCreateBody', () => {
   it('requires a non-blank name', () => {

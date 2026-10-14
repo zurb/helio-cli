@@ -6,8 +6,8 @@ Ships against zurb/helio#5043 (project create + rename), ZURB-4294.
 
 ### Added
 - **`projects create`.** `--name` (required, unique in the account),
-  `--tags <tags...>`, and `--account-id` for ZURB tokens creating a project in
-  a client account. The returned `id` is the `--project-id` for `tests create`,
+  `--tags <tags...>`, and `--account-id` for tokens with access to more than
+  one account. The returned `id` is the `--project-id` for `tests create`,
   so a script no longer has to leave the CLI to make a project first.
 - **`projects update <id>`.** Rename with `--name`, replace tags with
   `--tags <tags...>`, or remove them with `--clear-tags`. Tags replace the

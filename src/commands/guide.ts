@@ -720,7 +720,7 @@ export const GUIDE_JSON = {
         description: 'Create a project; the returned id is the --project-id for tests create',
         required: ['--name'],
         optional: ['--tags <tags...>', '--account-id'],
-        notes: 'Name must be unique in the account (422 otherwise). Tags max 33 characters each. --account-id is ZURB tokens only and targets a client account; without it an API key creates the project in its own account, owned by the account owner.',
+        notes: 'Name must be unique in the account (422 otherwise). Tags max 33 characters each. --account-id creates the project in another account the token has access to; without it the project goes in the token home account.',
       },
       update: {
         description: 'Rename a project or replace its tags',

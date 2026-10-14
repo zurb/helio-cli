@@ -79,7 +79,7 @@ helio-cli projects tests <project-uuid>
 
 # Create a project (its id is the --project-id for tests create)
 helio-cli projects create --name "Checkout redesign" --tags ux q4
-helio-cli projects create --name "Acme onboarding" --account-id <account-id>   # ZURB tokens: create in a client account
+helio-cli projects create --name "Onboarding study" --account-id <account-id>  # tokens with access to more than one account
 
 # Rename a project or replace its tags (--tags replaces the whole list)
 helio-cli projects update <project-uuid> --name "Checkout v2"

@@ -147,7 +147,7 @@ export function registerProjectsCommand(program: Command): void {
     .description('Create a project (its id is the --project-id for tests create)')
     .requiredOption('--name <name>', 'Project name (must be unique in the account)')
     .option('--tags <tags...>', `Project tags (max ${MAX_TAG_LENGTH} characters each)`)
-    .option('--account-id <id>', 'Create the project in this account instead of the token home account (ZURB tokens only)')
+    .option('--account-id <id>', 'Create the project in this account instead of the token home account (for tokens with access to more than one account)')
     .action(
       withErrorHandling(async (cmdOpts) => {
         const body = buildProjectCreateBody(cmdOpts);
