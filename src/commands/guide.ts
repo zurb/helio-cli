@@ -511,7 +511,11 @@ export const GUIDE_JSON = {
           '--offset': 'Pagination offset',
         },
       },
-      get: { description: 'Get test details', args: '<id>' },
+      get: {
+        description: 'Get test details',
+        args: '<id>',
+        note: 'Returns report_uuid and report_share_url (the Share link, which opens the report without signing in) since the 2026-11-10 API release; tests list --output json and tests preview carry them too. Before that release only tests send returned the link.',
+      },
       preview: {
         description: 'Human-readable summary of a test with questions, choices, and results',
         preference_note:

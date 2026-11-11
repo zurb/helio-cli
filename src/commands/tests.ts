@@ -279,6 +279,12 @@ export interface TestShowResponse {
   ux_metrics?: UxMetricSummaryEntry[];
   /** Devices the test recruits on. Present since the 2026-09-19 API release. */
   devices?: string[];
+  /**
+   * Shareable report link (opens the report without signing in). Present
+   * since the 2026-11-10 API release; before that only `send` returned it.
+   */
+  report_uuid?: string | null;
+  report_share_url?: string | null;
   [key: string]: unknown;
 }
 
@@ -3535,6 +3541,9 @@ export function registerTestsCommand(program: Command): void {
               introduction: test.introduction ?? null,
               // null = an API older than 2026-09-19, which doesn't say.
               devices: Array.isArray(test.devices) ? test.devices : null,
+              // null = an API older than 2026-11-10, which doesn't send it.
+              report_uuid: test.report_uuid ?? null,
+              report_share_url: test.report_share_url ?? null,
             },
             questions: reportData?.questions_summary?.length
               ? mergeSectionFieldsIntoReportQuestions(reportData.questions_summary, test.sections)
@@ -3556,6 +3565,9 @@ export function registerTestsCommand(program: Command): void {
         if (meta.project_name) {
           const account = meta.account_name ? ` · ${meta.account_name}` : '';
           console.log(`Project: ${meta.project_name}${account}`);
+        }
+        if (test.report_share_url) {
+          console.log(`Report: ${test.report_share_url}`);
         }
         const responseCount = meta.responses_count ?? 0;
         console.log(`Responses: ${responseCount}`);

@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+Ships against the helio 2026-11-10 Public API release (report share link), ZURB-4548.
+
+### Added
+- **The report Share link after launch.** `tests get` and `tests list
+  --output json` now include `report_uuid` and `report_share_url`, and
+  `tests preview` prints `Report: <url>` under the project line (and adds
+  both to its JSON `test` block). The link used to show up only once, in
+  `tests send`'s output. Against an older API the fields are absent and
+  `preview` reports them as `null`.
+
 ## 0.12.0
 
 Ships against zurb/helio#5043 (project create + rename), ZURB-4294.
