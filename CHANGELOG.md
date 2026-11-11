@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.13.0
 
-Ships against the helio 2026-11-10 Public API release (report share link), ZURB-4548.
+Ships against zurb/helio#5130 (report share link), ZURB-4548.
 
 ### Added
 - **The report Share link after launch.** `tests get` and `tests list
