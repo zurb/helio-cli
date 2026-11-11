@@ -1,6 +1,6 @@
 {
   "name": "@zurb/helio-cli",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "description": "CLI for the Helio Public API",
   "type": "module",
   "bin": {
