@@ -6,7 +6,7 @@
 - **`edit-question --type` keeps the question's section id, and the skip rules
   that point at it.** Helio used to destroy the section and insert a new one,
   which deleted every branching rule on another question that skipped to it,
-  without an error. With zurb/helio ZURB-4587 the API rebuilds the question on
+  without an error. With zurb/helio#5144 (ZURB-4587) the API rebuilds the question on
   the same section, so the id that comes back is the one you sent and those
   rules survive. Everything about the question itself still comes from the
   call (pass `--skip-question-intro`, `--display-seconds`, `--branching` and
