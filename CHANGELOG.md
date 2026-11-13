@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-Needs zurb/helio ZURB-4590 (introduction card on UX metric sections).
+Needs zurb/helio#5148 (ZURB-4590, introduction card on UX metric sections).
 
 ### Added
 - **Skip the question introduction on a UX metric section.**
