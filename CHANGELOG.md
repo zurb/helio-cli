@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-Needs zurb/helio ZURB-4589 (selection_limit on the Public API).
+Needs zurb/helio#5147 (ZURB-4589, selection_limit on the Public API).
 
 ### Added
 - **"Select up to N" on multiple choice.** `--selection-limit <n>` on
