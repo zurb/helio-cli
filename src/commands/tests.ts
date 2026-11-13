@@ -1518,6 +1518,34 @@ export function uxMetricWarnings(metrics: unknown): string[] {
 }
 
 /**
+ * Without --type, edit-question is a UX metric section edit. Aimed at a
+ * regular question, the API answers "no question type found", which doesn't
+ * say what to do next. Returns a clearer error, or null to keep the original.
+ */
+export function regularQuestionNeedsTypeHint(err: unknown, question: QuestionInput): Error | null {
+  if (question.type) return null;
+  if (!(err instanceof HelioApiError) || !/no question type found/i.test(err.message)) return null;
+  return new Error(
+    'This is a regular question, so edit-question needs --type and the rest of its fields: it rebuilds the question from the flags given. ' +
+      'Read them from `tests preview <id> --output json` (questions[] uses the same keys) and pass them again with your change. ' +
+      'Without --type, edit-question only edits UX metric sections.',
+  );
+}
+
+/**
+ * Helio versions before ZURB-4590 answer a metric-section edit with 200 and
+ * ignore disable_instruction_card. Newer ones echo it back, so a missing key
+ * means the setting was dropped.
+ */
+export function metricIntroCardDropWarnings(question: QuestionInput, data: unknown): string[] {
+  if (question.disable_instruction_card === undefined) return [];
+  if (data && typeof data === 'object' && 'disable_instruction_card' in data) return [];
+  return [
+    'This Helio version ignores --skip-question-intro on a UX metric section, so the introduction card was not changed. Set it in the Helio editor, or update Helio (ZURB-4590).',
+  ];
+}
+
+/**
  * Per-section overrides on the UX metric object form. Beyond shape, these catch
  * the two ways an override silently produces a metric that scores zero: a
  * hotspot-scored click section with no hotspots, and a brand_score whose brand
@@ -1555,6 +1583,10 @@ function validateUxMetricSectionOverrides(
     if (!overrides || typeof overrides !== 'object' || Array.isArray(overrides)) {
       errors.push({ question: 0, field: sectionField, message: 'Must be an object' });
       continue;
+    }
+
+    if (overrides.disable_instruction_card != null && typeof overrides.disable_instruction_card !== 'boolean') {
+      errors.push({ question: 0, field: `${sectionField}.disable_instruction_card`, message: 'Must be true or false' });
     }
 
     // The metric template builder never reads it, so the API would drop it.
@@ -4007,7 +4039,7 @@ export function registerTestsCommand(program: Command): void {
     .option('--can-skip-cards', 'Allow skipping cards')
     .option('--asset-id <id>', 'Stimulus asset ID (see add-question for the types that take one; also a safe edit on a UX metric section)')
     .option('--site-link <url>', 'Site link URL (free_response and click_test on a --type replacement; also a safe edit on a UX metric section)')
-    .option('--skip-question-intro', 'Skip the question introduction card (disable_instruction_card). --type replacement only, and a replacement recreates the section, so pass it again to keep it.')
+    .option('--skip-question-intro', 'Skip the question introduction card (disable_instruction_card). On a regular question it goes with --type, and the replacement rebuilds the question, so pass it again to keep it. On a UX metric section (no --type) it is a safe edit on its own.')
     .option('--no-skip-question-intro', 'Show the question introduction card (the default)')
     .option('--display-seconds <seconds>', 'Image display timer (5, 10 or 15; needs an image --asset-id). --type replacement only, and a replacement recreates the section, so pass it again to keep the timer.')
     .option('--hotspots <json>', 'Hotspots as JSON array or @path/to/file.json, for a click_test question or a click section of a UX metric: [{name?, x, y, width, height, priority?}]. Replaces the existing set.')
@@ -4084,13 +4116,6 @@ export function registerTestsCommand(program: Command): void {
             return;
           }
         } else {
-          // The metric-section edit path never reads disable_instruction_card,
-          // so the API would answer 200 and change nothing.
-          if (question.disable_instruction_card !== undefined) {
-            throw new Error(
-              '--skip-question-intro / --no-skip-question-intro need --type: the API ignores the introduction card setting on a UX metric section, so set that one in the Helio editor.',
-            );
-          }
           if (question.display_seconds !== undefined) {
             throw new Error(
               '--display-seconds needs --type: the API ignores the image display timer on a UX metric section, so set that one in the Helio editor.',
@@ -4148,22 +4173,30 @@ export function registerTestsCommand(program: Command): void {
             question.hotspots === undefined &&
             question.brand_choice === undefined &&
             question.randomize_choices === undefined &&
+            question.disable_instruction_card === undefined &&
             !question.followup
           ) {
             throw new Error(
-              'Provide at least one of --instructions, --asset-id, --site-link, --choices, --hotspots, --brand-choice, --randomize-choices, --followup, or --remove-followup.',
+              'Provide at least one of --instructions, --asset-id, --site-link, --choices, --hotspots, --brand-choice, --randomize-choices, --skip-question-intro / --no-skip-question-intro, --followup, or --remove-followup.',
             );
           }
         }
 
         const client = makeClient(program);
-        const data = await client.patch(`tests/${testId}/questions/${sectionId}/update_question`, question);
+        let data: unknown;
+        try {
+          data = await client.patch(`tests/${testId}/questions/${sectionId}/update_question`, question);
+        } catch (err) {
+          throw regularQuestionNeedsTypeHint(err, question) ?? err;
+        }
+        const warnings = question.type ? [] : metricIntroCardDropWarnings(question, data);
         if (isJsonMode()) {
-          printJson(data);
+          printJson(warnings.length ? { ...(data as Record<string, unknown>), warnings } : data);
         } else {
           const verb = question.type ? 'Replaced' : 'Updated';
           console.log(`\x1b[32m✓\x1b[0m ${verb} question ${sectionId} on test ${testId}`);
           printKeyValue(data as Record<string, unknown>);
+          for (const w of warnings) console.log(`\x1b[33m⚠\x1b[0m ${w}`);
         }
       }),
     );
