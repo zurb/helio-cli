@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Command } from 'commander';
-import { registerTestsCommand, customThanksMessage, thanksMessageDropWarning, type TestShowResponse } from './tests.js';
+import { registerTestsCommand, customThanksMessage, thanksMessageDropWarning, stripHtml, type TestShowResponse } from './tests.js';
 
 // ─── Contract ────────────────────────────────────────────────────────────────
 // The end-of-test thank-you message (thanks_message) was read back by
@@ -55,6 +55,11 @@ async function run(...args: string[]): Promise<void> {
 
 const writes = () => requests.filter(r => r.method !== 'GET');
 
+const createArgs = [
+  'tests', 'create', '--project-id', 'proj-1', '--name', 'N', '--intro', 'Hi',
+  '--target-audience-size', '10', '--questions', '[{"type":"free_response","instructions":"Why?"}]',
+];
+
 describe('customThanksMessage', () => {
   const base = { introduction: 'Hi', sections: [] } as unknown as TestShowResponse;
 
@@ -65,6 +70,11 @@ describe('customThanksMessage', () => {
   it('strips the auto-link markup GET adds', () => {
     const linked = 'See <a href="https://x.co" target="_blank">x.co</a> for more';
     expect(customThanksMessage({ ...base, has_thanks_message: true, thanks_message: linked })).toBe('See x.co for more');
+  });
+
+  it('keeps text that only looks like a tag, and decodes entities', () => {
+    expect(customThanksMessage({ ...base, has_thanks_message: true, thanks_message: '<p>We <3 you &amp; your team > all</p>' }))
+      .toBe('We <3 you & your team > all');
   });
 
   it('is null when the toggle is off, even if text is stored', () => {
@@ -89,10 +99,6 @@ describe('thanksMessageDropWarning', () => {
 });
 
 describe('tests create --thanks-message', () => {
-  const createArgs = [
-    'tests', 'create', '--project-id', 'proj-1', '--name', 'N', '--intro', 'Hi',
-    '--target-audience-size', '10', '--questions', '[{"type":"free_response","instructions":"Why?"}]',
-  ];
 
   it('sends thanks_message in the create body', async () => {
     responseBody = { test_id: 't-1', thanks_message: 'Thanks for your time' };
@@ -121,6 +127,56 @@ describe('tests create --thanks-message', () => {
     await run(...createArgs, '--thanks-message', 'Thanks', '--dry-run');
     expect(JSON.parse(logged.join('\n')).thanks_message).toBe('Thanks');
     expect(writes()).toHaveLength(0);
+  });
+});
+
+describe('stripHtml', () => {
+  it('removes real tags only', () => {
+    expect(stripHtml('<p>a</p><br/>b')).toBe('ab');
+    expect(stripHtml('1 < 2 and 3 > 2')).toBe('1 < 2 and 3 > 2');
+    expect(stripHtml('Q&amp;A &lt;beta&gt; &#39;now&#39;')).toBe("Q&A <beta> 'now'");
+  });
+});
+
+describe('--thanks-message "" (reset to the default)', () => {
+  it('update sends it on its own instead of failing "at least one field"', async () => {
+    responseBody = { test_id: 't-1', thanks_message: null };
+    await run('tests', 'update', 't-1', '--thanks-message', '');
+    expect(writes()[0]).toMatchObject({ method: 'PATCH', body: { thanks_message: '' } });
+  });
+
+  it('update sends it alongside other fields', async () => {
+    responseBody = { test_id: 't-1', name: 'X', thanks_message: null };
+    await run('tests', 'update', 't-1', '--name', 'X', '--thanks-message', '');
+    expect(writes()[0].body).toEqual({ name: 'X', thanks_message: '' });
+  });
+
+  it('update still refuses it with --clear-thanks-message', async () => {
+    const exit = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
+      throw new Error(`exit ${code}`);
+    }) as never);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    await expect(run('tests', 'update', 't-1', '--thanks-message', '', '--clear-thanks-message')).rejects.toThrow();
+    expect(writes()).toHaveLength(0);
+    exit.mockRestore();
+  });
+
+  it('update warns when an older API ignores the reset', async () => {
+    responseBody = { test_id: 't-1' };
+    await run('tests', 'update', 't-1', '--thanks-message', '');
+    expect(logged.some(l => l.includes('ignores thanks_message'))).toBe(true);
+  });
+
+  it('create sends it, and an older API that ignores it is not worth a warning', async () => {
+    responseBody = { test_id: 't-1' };
+    await run(...createArgs, '--thanks-message', '');
+    expect(writes()[0].body).toMatchObject({ thanks_message: '' });
+    expect(logged.some(l => l.includes('ignores thanks_message'))).toBe(false);
+  });
+
+  it('create --dry-run shows it as the default', async () => {
+    await run(...createArgs, '--thanks-message', '', '--dry-run');
+    expect(logged.some(l => l.includes('Thanks:') && l.includes('(Helio default)'))).toBe(true);
   });
 });
 

@@ -10,9 +10,16 @@
   default message. Needs zurb/helio#5145 (ZURB-4588). Against an older Helio the
   response doesn't echo the field, and the CLI warns that it was dropped
   (text, and `warnings` in `--output json`). ZURB-4588.
+- `--thanks-message ""` is sent too and resets to the default, the same as
+  `--clear-thanks-message`.
 - **Read-back.** `tests preview` prints `Thanks: <message>` under the intro and
   adds `thanks_message` to its JSON `test` block (`null` means Helio's
   default). `guide` documents both flags.
+
+### Fixed
+- Plain text read from Helio's HTML (question text, intro, the `Thanks:`
+  line) keeps text that only looks like a tag, such as `<3`, and decodes
+  `&amp;`, `&lt;`, `&gt;`, `&quot;` and numeric entities.
 
 ## 0.13.0
 

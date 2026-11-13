@@ -698,8 +698,19 @@ function formatStatus(status: string): string {
   return `${color}(${status})\x1b[0m`;
 }
 
-function stripHtml(html: string): string {
-  return html.replace(/<[^>]*>/g, '').trim();
+const HTML_ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
+
+/**
+ * Plain text from the editor's HTML. Only real tags (`<p>`, `</p>`, `<br/>`)
+ * are removed, so text like "<3 ... >" survives, and the common entities are
+ * decoded so `&amp;` prints as `&`.
+ */
+export function stripHtml(html: string): string {
+  return html
+    .replace(/<\/?[a-zA-Z][^>]*>/g, '')
+    .replace(/&(amp|lt|gt|quot|apos|nbsp);/g, (_, name: string) => HTML_ENTITIES[name])
+    .replace(/&#(\d+);/g, (_, code: string) => String.fromCharCode(Number(code)))
+    .trim();
 }
 
 function printReportQuestions(questions: ReportQuestion[]): void {
@@ -3252,7 +3263,7 @@ export function thanksMessageDropWarning(sent: boolean, data: unknown): string |
   if (!sent) return null;
   if (data && typeof data === 'object' && 'thanks_message' in data) return null;
   return (
-    'This Helio version ignores thanks_message, so the test still shows the default thank-you message. ' +
+    'This Helio version ignores thanks_message, so the thank-you message was not changed. ' +
     'It needs the Helio release with ZURB-4588; until then set it in the editor (Thank You toggle).'
   );
 }
@@ -3788,7 +3799,7 @@ export function registerTestsCommand(program: Command): void {
             total_sections: totalSections,
             estimated_answer_spend: spend,
           };
-          if (cmdOpts.thanksMessage) summary.thanks_message = cmdOpts.thanksMessage;
+          if (cmdOpts.thanksMessage !== undefined) summary.thanks_message = cmdOpts.thanksMessage;
           if (cmdOpts.audiences) summary.audiences = cmdOpts.audiences;
           if (demographics !== undefined) summary.demographics = demographics;
           if (cmdOpts.excludeTests) summary.exclude_test_ids = cmdOpts.excludeTests;
@@ -3852,7 +3863,9 @@ export function registerTestsCommand(program: Command): void {
               console.log(`  Excludes:      ${(cmdOpts.excludeTests as string[]).join(', ')}`);
             }
             console.log(`  Devices:       ${formatDevices(devices ?? [...DEVICES])}`);
-            if (cmdOpts.thanksMessage) console.log(`  Thanks:        ${cmdOpts.thanksMessage}`);
+            if (cmdOpts.thanksMessage !== undefined) {
+              console.log(`  Thanks:        ${cmdOpts.thanksMessage.trim() || '(Helio default)'}`);
+            }
             console.log(`  Questions:     ${questionCount}`);
             if (uxMetricTypeNames.length > 0) {
               console.log(`  UX metrics:    ${uxMetricTypeNames.join(', ')} (${metricSectionCount} auto-generated sections)`);
@@ -3911,10 +3924,12 @@ export function registerTestsCommand(program: Command): void {
         if (demographics !== undefined) body.demographics = demographics;
         if (cmdOpts.excludeTests) body.exclude_test_ids = cmdOpts.excludeTests;
         if (devices) body.devices = devices;
-        if (cmdOpts.thanksMessage) body.thanks_message = cmdOpts.thanksMessage;
+        // "" is sent too: it asks for the default screen, which the API reads the same as null.
+        if (cmdOpts.thanksMessage !== undefined) body.thanks_message = cmdOpts.thanksMessage;
 
         const data = await client.post('tests', body);
-        const thanksWarning = thanksMessageDropWarning(Boolean(cmdOpts.thanksMessage), data);
+        // An empty message on create asks for the default, which an older Helio gives anyway.
+        const thanksWarning = thanksMessageDropWarning(Boolean(cmdOpts.thanksMessage?.trim()), data);
         const createWarnings = [
           ...excludeTestWarnings(cmdOpts.excludeTests),
           ...uxMetricWarnings(uxMetrics ?? []),
@@ -4487,10 +4502,11 @@ export function registerTestsCommand(program: Command): void {
         const body: Record<string, unknown> = {};
         if (cmdOpts.name) body.name = cmdOpts.name;
         if (cmdOpts.intro) body.intro = cmdOpts.intro;
-        if (cmdOpts.thanksMessage && cmdOpts.clearThanksMessage) {
+        if (cmdOpts.thanksMessage !== undefined && cmdOpts.clearThanksMessage) {
           throw new Error('Use either --thanks-message or --clear-thanks-message, not both.');
         }
-        if (cmdOpts.thanksMessage) body.thanks_message = cmdOpts.thanksMessage;
+        // !== undefined, not truthiness: --thanks-message "" is a request to reset to the default.
+        if (cmdOpts.thanksMessage !== undefined) body.thanks_message = cmdOpts.thanksMessage;
         // null, not "": the API reads both as "back to the default".
         if (cmdOpts.clearThanksMessage) body.thanks_message = null;
         if (cmdOpts.targetAudienceSize) body.target_audience_size = parsePositiveInt(cmdOpts.targetAudienceSize, '--target-audience-size');
