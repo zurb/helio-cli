@@ -13,8 +13,10 @@
   so on again to keep them). The help text, `guide` and README say so.
 - Against an older Helio, a `--type` edit that comes back with a different
   section id now prints a warning (and adds `warnings` to `--output json`)
-  telling you to check the branching in `tests preview`. A numeric section id
-  can't be compared with the uuid the API returns, so it isn't checked. ZURB-4587.
+  telling you to check the branching in `tests preview`. This works for the
+  numeric section id `tests preview` shows as well as the uuid: Helio with
+  ZURB-4587 echoes the numeric `id`, and a response without one comes from an
+  older Helio. ZURB-4587.
 
 ## 0.13.0
 

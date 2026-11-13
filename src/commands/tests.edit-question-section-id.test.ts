@@ -12,16 +12,18 @@ import { registerTestsCommand, sectionIdChangeWarning } from './tests.js';
 const SECTION = '01JSECTIONUUIDAAAAAAAAAAAA';
 let logged: string[];
 let returnedSectionId: string;
+let returnedNumericId: number | undefined;
 let lastRequest: { url: string; method: string; body: unknown } | null;
 
 beforeEach(() => {
   logged = [];
   returnedSectionId = SECTION;
+  returnedNumericId = undefined;
   lastRequest = null;
   vi.stubGlobal('fetch', vi.fn(async (url: string | URL, init?: RequestInit) => {
     lastRequest = { url: String(url), method: init?.method ?? 'GET', body: init?.body ? JSON.parse(String(init.body)) : null };
     return new Response(
-      JSON.stringify({ section_id: returnedSectionId, type: 'NPS', instructions: 'Updated', position: 3, test_id: 'test-1' }),
+      JSON.stringify({ section_id: returnedSectionId, id: returnedNumericId, type: 'NPS', instructions: 'Updated', position: 3, test_id: 'test-1' }),
       { status: 200, headers: { 'content-type': 'application/json' } },
     );
   }));
@@ -59,8 +61,16 @@ describe('sectionIdChangeWarning', () => {
     expect(warning).toContain('skip rules');
   });
 
-  it('does not compare a numeric id with the uuid that comes back', () => {
-    expect(sectionIdChangeWarning('4512', { section_id: SECTION })).toBeNull();
+  // tests preview and GET /tests/:id show numeric section ids, so that is
+  // what gets copied into edit-question.
+  it('compares a numeric id with the numeric id Helio echoes, as strings', () => {
+    expect(sectionIdChangeWarning('4512', { section_id: SECTION, id: 4512 })).toBeNull();
+    expect(sectionIdChangeWarning('4512', { section_id: SECTION, id: '4512' })).toBeNull();
+    expect(sectionIdChangeWarning('4512', { section_id: SECTION, id: 4513 })).toContain('new section id');
+  });
+
+  it('warns for a numeric id when an older Helio sends no numeric id back', () => {
+    expect(sectionIdChangeWarning('4512', { section_id: '01JNEWSECTIONUUIDBBBBBBBBB' })).toContain('skip rules');
   });
 
   it('is quiet when the response has no section_id', () => {
@@ -97,6 +107,18 @@ describe('tests edit-question --type', () => {
     await run('tests', 'edit-question', 'test-1', SECTION, '--type', 'nps', '--instructions', 'Updated');
     const out = JSON.parse(logged.join('\n'));
     expect(out.warnings).toBeUndefined();
+  });
+
+  it('warns for a numeric id copied from preview when an older Helio rebuilt the section', async () => {
+    returnedSectionId = '01JNEWSECTIONUUIDBBBBBBBBB';
+    await run('tests', 'edit-question', 'test-1', '4512', '--type', 'nps', '--instructions', 'Updated');
+    expect(logged.some(l => l.includes('⚠') && l.includes('new section id'))).toBe(true);
+  });
+
+  it('is quiet for a numeric id that Helio echoes back unchanged', async () => {
+    returnedNumericId = 4512;
+    await run('tests', 'edit-question', 'test-1', '4512', '--type', 'nps', '--instructions', 'Updated');
+    expect(logged.some(l => l.includes('⚠'))).toBe(false);
   });
 
   it('does not check a UX metric section edit, which never changed the id', async () => {

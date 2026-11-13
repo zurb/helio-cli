@@ -3229,18 +3229,27 @@ export function walkthroughScreenJson(screen: WalkthroughScreen): Record<string,
 }
 
 /**
- * A `--type` replacement keeps the question's section id since ZURB-4587:
- * Helio rebuilds the question on the same section, so skip rules elsewhere in
- * the test that point at it survive. Older Helio versions destroyed the
- * section and inserted a new one, which silently deleted those rules. The
- * response carries the section's uuid, so a different uuid back means the
- * API is one of those older versions. A numeric id can't be compared with the
- * uuid that comes back, so it is not checked.
+ * On Helio versions with ZURB-4587 a `--type` replacement keeps the question's
+ * section id: Helio rebuilds the question on the same section, so skip rules
+ * elsewhere in the test that point at it survive. Older versions destroyed the
+ * section and inserted a new one, which silently deleted those rules.
+ *
+ * The response carries the section's uuid as section_id, and Helio with
+ * ZURB-4587 also echoes its numeric id. Ids are compared as strings: a uuid
+ * against section_id, a numeric id (what `tests preview` and GET /tests/:id
+ * show) against id. A numeric id with no id in the response means an older
+ * Helio, which always made a new section.
  */
 export function sectionIdChangeWarning(requestedId: string, data: unknown): string | null {
-  if (/^\d+$/.test(requestedId)) return null;
-  const returned = (data as { section_id?: unknown } | null)?.section_id;
-  if (typeof returned !== 'string' || returned === requestedId) return null;
+  const response = (data ?? {}) as { section_id?: unknown; id?: unknown };
+  const requested = String(requestedId);
+  const returned = response.section_id == null ? null : String(response.section_id);
+  if (/^\d+$/.test(requested)) {
+    if (response.id != null && String(response.id) === requested) return null;
+    if (response.id == null && returned == null) return null;
+  } else if (returned == null || returned === requested) {
+    return null;
+  }
   return (
     `Helio gave this question a new section id (${returned}). This Helio version deletes skip rules that ` +
     'pointed at the old one, so check the branching in `tests preview` and re-add any that are gone. ' +
@@ -4007,7 +4016,7 @@ export function registerTestsCommand(program: Command): void {
 
   cmd
     .command('edit-question <test-id> <section-id>')
-    .description('Replace a question on a draft test, keeping its section id (or edit instructions/assets/choices/hotspots/brand-choice/randomize/follow-ups on a UX metric section)')
+    .description('Replace a question on a draft test, keeping its section id on Helio versions with ZURB-4587 (or edit instructions/assets/choices/hotspots/brand-choice/randomize/follow-ups on a UX metric section)')
     .option('--type <type>', 'Question type (required for regular questions, omit for UX metric sections)')
     .option('--instructions <text>', 'Question text')
     .option('--choices <items...>', 'Choices')

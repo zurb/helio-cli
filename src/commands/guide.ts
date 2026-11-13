@@ -661,7 +661,7 @@ export const GUIDE_JSON = {
           point_allocation: ['--choices <items...> (min 2)', '--points <n>', '--points-label <label>', '--asset-id <id>'],
           max_diff: ['--choices <items...> (min 4)', '--asset-id <id>'],
         },
-        note: 'Rebuilds the question from the flags given, on the same section: the section id stays the same, and skip rules on other questions that point at it are kept. Everything about the question itself comes from this call, so pass --skip-question-intro / --display-seconds / --randomize-choices / --branching / --followup again to keep them. Helio versions before ZURB-4587 gave the question a new section id and deleted the skip rules that pointed at it; the CLI warns when it sees a new id come back.',
+        note: 'Rebuilds the question from the flags given. On Helio versions with ZURB-4587 that happens on the same section: the section id stays the same, and skip rules on other questions that point at it are kept. Everything about the question itself comes from this call, so pass --skip-question-intro / --display-seconds / --randomize-choices / --branching / --followup again to keep them. Helio versions before ZURB-4587 gave the question a new section id and deleted the skip rules that pointed at it; the CLI warns when it sees a new id come back, whether you passed the uuid or the numeric id from tests preview.',
       },
       'remove-question': {
         description: 'Remove a question from a draft test',
