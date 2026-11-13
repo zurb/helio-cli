@@ -7,7 +7,7 @@
   `--clear-thanks-message` on `update`: the message participants see when they
   finish (`thanks_message`, the editor's Thank You message). The API read it
   back but never wrote it, so a session that asked for one got a 200 and the
-  default message. Needs zurb/helio ZURB-4588. Against an older Helio the
+  default message. Needs zurb/helio#5145 (ZURB-4588). Against an older Helio the
   response doesn't echo the field, and the CLI warns that it was dropped
   (text, and `warnings` in `--output json`). ZURB-4588.
 - **Read-back.** `tests preview` prints `Thanks: <message>` under the intro and
