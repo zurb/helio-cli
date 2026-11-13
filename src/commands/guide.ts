@@ -549,7 +549,7 @@ export const GUIDE_JSON = {
         one_of_required: ['--ux-metrics <types...>', '--ux-metrics-json <json>', '--questions <json>'],
         recommended_shape: 'Lead with --ux-metrics (scored, validated sections) and use --questions only for what no metric covers. See ux_metrics.why_metrics_first and ux_metrics.starting_stacks.',
         project: 'Provide either --project-id <uuid> or --project-name <name> (resolved to UUID)',
-        optional: ['--audience-type <type> (default: open)', '--audiences <ids...>', '--demographics <json>', '--exclude-tests <ids...>', '--devices <names...>', '--ux-metrics <types...>', '--ux-metrics-json <json>', '--ux-metric-context <text>', '--dry-run'],
+        optional: ['--thanks-message <text>', '--audience-type <type> (default: open)', '--audiences <ids...>', '--demographics <json>', '--exclude-tests <ids...>', '--devices <names...>', '--ux-metrics <types...>', '--ux-metrics-json <json>', '--ux-metric-context <text>', '--dry-run'],
         audience_types: {
           open: 'Share-link recruiting; --audiences and --demographics are not accepted',
           basic: 'Helio panel, no filters',
@@ -676,10 +676,11 @@ export const GUIDE_JSON = {
       update: {
         description: 'Update a draft test, or replace its audience (clone-then-retarget flow)',
         args: '<id>',
-        optional: ['--name <name>', '--intro <text>', '--target-audience-size <n>', '--audience-type <type>', '--audiences <ids...>', '--demographics <json>', '--exclude-tests <ids...>', '--clear-exclude-tests', '--devices <names...>'],
+        optional: ['--name <name>', '--intro <text>', '--thanks-message <text>', '--clear-thanks-message', '--target-audience-size <n>', '--audience-type <type>', '--audiences <ids...>', '--demographics <json>', '--exclude-tests <ids...>', '--clear-exclude-tests', '--devices <names...>'],
         audience_note: '--audience-type replaces the pending quota wholesale (size carries over unless --target-audience-size is also passed); --audiences/--demographics require it. Same audience type vocabulary as create. Non-draft tests 422.',
         exclude_tests_note: '--exclude-tests replaces the exclusion list wholesale and, unlike --audiences, does NOT need --audience-type — without one it applies to the audience the test already has (so the panel-only rule is checked by the server, not the CLI). --clear-exclude-tests sends [], which is exempt from every gate, so a test can always be undone. Same cap and symmetry rules as create.',
         devices_note: '--devices replaces the device set (any of desktop, tablet, mobile); omit it to leave targeting alone, and pass all three to allow every device again. Draft only — set it before send, which is when the panel reads it.',
+        thanks_message_note: '--thanks-message sets the message participants see when they finish (thanks_message; the editor\'s Thank You message), and --clear-thanks-message goes back to Helio\'s default. Also on create. tests preview prints it as Thanks: (null in JSON means the default). Helio versions before ZURB-4588 drop it without an error; the CLI warns when the response shows that.',
       },
       responses: { description: 'Get all responses', args: '<id>' },
       report: {

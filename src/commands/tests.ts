@@ -268,6 +268,10 @@ export interface TestShowResponse {
   account_id?: string;
   account_name?: string;
   introduction: string;
+  /** The editor's Thank You toggle. When false participants see Helio's default message. */
+  has_thanks_message?: boolean | null;
+  /** The custom end-of-test message (URLs come back auto-linked as HTML). */
+  thanks_message?: string | null;
   sections: SectionData[];
   /** Present since the 2026-07-30 API release; null when the test has no quota. */
   audience?: AudienceData | null;
@@ -3228,6 +3232,31 @@ export function walkthroughScreenJson(screen: WalkthroughScreen): Record<string,
   };
 }
 
+/**
+ * The custom message participants see when they finish, or null when the test
+ * shows Helio's default. GET returns the text even with the toggle off, so the
+ * toggle decides.
+ */
+export function customThanksMessage(test: TestShowResponse): string | null {
+  if (!test.has_thanks_message) return null;
+  const text = typeof test.thanks_message === 'string' ? stripHtml(test.thanks_message) : '';
+  return text || null;
+}
+
+/**
+ * Helio versions before ZURB-4588 take thanks_message with a 200 and drop it.
+ * The ones that save it echo it back in the create and update responses, so a
+ * missing key after sending one means it didn't land.
+ */
+export function thanksMessageDropWarning(sent: boolean, data: unknown): string | null {
+  if (!sent) return null;
+  if (data && typeof data === 'object' && 'thanks_message' in data) return null;
+  return (
+    'This Helio version ignores thanks_message, so the test still shows the default thank-you message. ' +
+    'It needs the Helio release with ZURB-4588; until then set it in the editor (Thank You toggle).'
+  );
+}
+
 export function registerTestsCommand(program: Command): void {
   const cmd = program.command('tests').alias('t').description('Manage tests');
 
@@ -3539,6 +3568,8 @@ export function registerTestsCommand(program: Command): void {
             test: {
               ...meta,
               introduction: test.introduction ?? null,
+              // null = Helio's default thank-you message.
+              thanks_message: customThanksMessage(test),
               // null = an API older than 2026-09-19, which doesn't say.
               devices: Array.isArray(test.devices) ? test.devices : null,
               // null = an API older than 2026-11-10, which doesn't send it.
@@ -3576,6 +3607,10 @@ export function registerTestsCommand(program: Command): void {
         }
         if (test.introduction) {
           console.log(`Intro: ${test.introduction}`);
+        }
+        const thanks = customThanksMessage(test);
+        if (thanks) {
+          console.log(`Thanks: ${thanks}`);
         }
         console.log();
 
@@ -3641,6 +3676,7 @@ export function registerTestsCommand(program: Command): void {
     .option('--project-name <name>', 'Project name (resolved to UUID)')
     .requiredOption('--name <name>', 'Test name')
     .requiredOption('--intro <text>', 'Introduction text')
+    .option('--thanks-message <text>', 'Message participants see when they finish (the editor\'s Thank You message). Omit it for Helio\'s default.')
     .option(
       '--audience-type <type>',
       'Audience type: open (share link), basic (panel, no filters), targeted (panel + --demographics), advanced (panel + --audiences), customer_list (your lists + --audiences)',
@@ -3752,6 +3788,7 @@ export function registerTestsCommand(program: Command): void {
             total_sections: totalSections,
             estimated_answer_spend: spend,
           };
+          if (cmdOpts.thanksMessage) summary.thanks_message = cmdOpts.thanksMessage;
           if (cmdOpts.audiences) summary.audiences = cmdOpts.audiences;
           if (demographics !== undefined) summary.demographics = demographics;
           if (cmdOpts.excludeTests) summary.exclude_test_ids = cmdOpts.excludeTests;
@@ -3815,6 +3852,7 @@ export function registerTestsCommand(program: Command): void {
               console.log(`  Excludes:      ${(cmdOpts.excludeTests as string[]).join(', ')}`);
             }
             console.log(`  Devices:       ${formatDevices(devices ?? [...DEVICES])}`);
+            if (cmdOpts.thanksMessage) console.log(`  Thanks:        ${cmdOpts.thanksMessage}`);
             console.log(`  Questions:     ${questionCount}`);
             if (uxMetricTypeNames.length > 0) {
               console.log(`  UX metrics:    ${uxMetricTypeNames.join(', ')} (${metricSectionCount} auto-generated sections)`);
@@ -3873,11 +3911,14 @@ export function registerTestsCommand(program: Command): void {
         if (demographics !== undefined) body.demographics = demographics;
         if (cmdOpts.excludeTests) body.exclude_test_ids = cmdOpts.excludeTests;
         if (devices) body.devices = devices;
+        if (cmdOpts.thanksMessage) body.thanks_message = cmdOpts.thanksMessage;
 
         const data = await client.post('tests', body);
+        const thanksWarning = thanksMessageDropWarning(Boolean(cmdOpts.thanksMessage), data);
         const createWarnings = [
           ...excludeTestWarnings(cmdOpts.excludeTests),
           ...uxMetricWarnings(uxMetrics ?? []),
+          ...(thanksWarning ? [thanksWarning] : []),
         ];
         if (isJsonMode()) {
           printJson(createWarnings.length ? { ...(data as object), warnings: createWarnings } : data);
@@ -4419,6 +4460,8 @@ export function registerTestsCommand(program: Command): void {
     .description('Update a draft test (fields, or replace the audience for the clone-then-retarget flow)')
     .option('--name <name>', 'New test name')
     .option('--intro <text>', 'New introduction text')
+    .option('--thanks-message <text>', 'Message participants see when they finish (the editor\'s Thank You message)')
+    .option('--clear-thanks-message', 'Go back to Helio\'s default thank-you message')
     .option('--target-audience-size <n>', 'New target audience size')
     .option(
       '--audience-type <type>',
@@ -4444,6 +4487,12 @@ export function registerTestsCommand(program: Command): void {
         const body: Record<string, unknown> = {};
         if (cmdOpts.name) body.name = cmdOpts.name;
         if (cmdOpts.intro) body.intro = cmdOpts.intro;
+        if (cmdOpts.thanksMessage && cmdOpts.clearThanksMessage) {
+          throw new Error('Use either --thanks-message or --clear-thanks-message, not both.');
+        }
+        if (cmdOpts.thanksMessage) body.thanks_message = cmdOpts.thanksMessage;
+        // null, not "": the API reads both as "back to the default".
+        if (cmdOpts.clearThanksMessage) body.thanks_message = null;
         if (cmdOpts.targetAudienceSize) body.target_audience_size = parsePositiveInt(cmdOpts.targetAudienceSize, '--target-audience-size');
 
         if (cmdOpts.excludeTests && cmdOpts.clearExcludeTests) {
@@ -4498,12 +4547,13 @@ export function registerTestsCommand(program: Command): void {
 
         if (Object.keys(body).length === 0) {
           throw new Error(
-            'At least one field is required: --name, --intro, --target-audience-size, --audience-type, --exclude-tests, --clear-exclude-tests, or --devices',
+            'At least one field is required: --name, --intro, --thanks-message, --clear-thanks-message, --target-audience-size, --audience-type, --exclude-tests, --clear-exclude-tests, or --devices',
           );
         }
 
         const data = await client.patch(`tests/${id}`, body);
-        const warnings = excludeTestWarnings(cmdOpts.excludeTests);
+        const thanksWarning = thanksMessageDropWarning('thanks_message' in body, data);
+        const warnings = [...excludeTestWarnings(cmdOpts.excludeTests), ...(thanksWarning ? [thanksWarning] : [])];
         if (isJsonMode()) {
           printJson(warnings.length ? { ...(data as object), warnings } : data);
         } else {

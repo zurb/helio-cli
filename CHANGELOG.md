@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **`--thanks-message <text>` on `tests create` and `tests update`**, and
+  `--clear-thanks-message` on `update`: the message participants see when they
+  finish (`thanks_message`, the editor's Thank You message). The API read it
+  back but never wrote it, so a session that asked for one got a 200 and the
+  default message. Needs zurb/helio ZURB-4588. Against an older Helio the
+  response doesn't echo the field, and the CLI warns that it was dropped
+  (text, and `warnings` in `--output json`). ZURB-4588.
+- **Read-back.** `tests preview` prints `Thanks: <message>` under the intro and
+  adds `thanks_message` to its JSON `test` block (`null` means Helio's
+  default). `guide` documents both flags.
+
 ## 0.13.0
 
 Ships against zurb/helio#5130 (report share link), ZURB-4548.
