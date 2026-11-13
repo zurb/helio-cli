@@ -625,7 +625,7 @@ export const GUIDE_JSON = {
         note: 'Validates the question before sending. Easier than building a full JSON array.',
       },
       'edit-question': {
-        description: 'Replace a question on a draft test (keeps same position), or edit safe fields on a UX metric section',
+        description: 'Replace a question on a draft test (keeps its position and section id), or edit safe fields on a UX metric section',
         args: '<test-id> <section-id>',
         modes: {
           regular_question: {
@@ -633,7 +633,7 @@ export const GUIDE_JSON = {
             required: ['--type <type>', '--instructions <text>'],
             options: {
               '--asset-id <id>': 'Stimulus shown with the question — same types as add-question',
-              '--skip-question-intro / --no-skip-question-intro': 'Skip or show the question introduction card (disable_instruction_card). The replacement recreates the section, so an omitted flag resets it to shown.',
+              '--skip-question-intro / --no-skip-question-intro': 'Skip or show the question introduction card (disable_instruction_card). The replacement rebuilds the question from the flags given, so an omitted flag resets it to shown.',
               '--display-seconds <seconds>': 'Image display timer (5, 10 or 15; needs an image --asset-id). The replacement rebuilds the question, so an omitted flag turns the timer off.',
             },
           },
@@ -661,7 +661,7 @@ export const GUIDE_JSON = {
           point_allocation: ['--choices <items...> (min 2)', '--points <n>', '--points-label <label>', '--asset-id <id>'],
           max_diff: ['--choices <items...> (min 4)', '--asset-id <id>'],
         },
-        note: 'Destroys and recreates the section at the same position — including its introduction card setting and image display timer, so pass --skip-question-intro / --display-seconds again to keep them.',
+        note: 'Rebuilds the question from the flags given, on the same section: the section id stays the same, and skip rules on other questions that point at it are kept. Everything about the question itself comes from this call, so pass --skip-question-intro / --display-seconds / --randomize-choices / --branching / --followup again to keep them. Helio versions before ZURB-4587 gave the question a new section id and deleted the skip rules that pointed at it; the CLI warns when it sees a new id come back.',
       },
       'remove-question': {
         description: 'Remove a question from a draft test',

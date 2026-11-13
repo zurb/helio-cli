@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- **`edit-question --type` keeps the question's section id, and the skip rules
+  that point at it.** Helio used to destroy the section and insert a new one,
+  which deleted every branching rule on another question that skipped to it,
+  without an error. With zurb/helio ZURB-4587 the API rebuilds the question on
+  the same section, so the id that comes back is the one you sent and those
+  rules survive. Everything about the question itself still comes from the
+  call (pass `--skip-question-intro`, `--display-seconds`, `--branching` and
+  so on again to keep them). The help text, `guide` and README say so.
+- Against an older Helio, a `--type` edit that comes back with a different
+  section id now prints a warning (and adds `warnings` to `--output json`)
+  telling you to check the branching in `tests preview`. A numeric section id
+  can't be compared with the uuid the API returns, so it isn't checked. ZURB-4587.
+
 ## 0.13.0
 
 Ships against zurb/helio#5130 (report share link), ZURB-4548.
