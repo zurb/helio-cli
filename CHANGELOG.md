@@ -11,8 +11,11 @@ Needs zurb/helio#5147 (ZURB-4589, selection_limit on the Public API).
   `allow_multiple: true` and runs from 2 to the number of choices.
   `choice_selection_limit`, `max_selections`, `max_choices` and
   `selection_max` are rejected with a pointer to `selection_limit`, since the
-  API ignores them. Against an older API the key is dropped, so check
-  `tests preview`.
+  API ignores them. Against an older Helio the key is dropped with a 200:
+  `add-question` and `edit-question` warn when the response doesn't echo
+  `selection_limit` back (text, and `warnings` in `--output json`); after
+  `tests create`, check `tests preview`.
+- The limit is checked against the number of distinct choices.
 
 ### Fixed
 - **`tests preview` and `tests walkthrough` read multi-select back
@@ -22,7 +25,7 @@ Needs zurb/helio#5147 (ZURB-4589, selection_limit on the Public API).
   `☐ select up to N` or `☐ select any number` and emits `allow_multiple` and
   `selection_limit` as write keys. The walkthrough enforces the limit.
 
-### Breaking (JSON output shape)
+### Changed (JSON output shape, additive)
 - `tests walkthrough --output json` screens gain `selection_limit` (a number,
   or `null` when there is no limit).
 

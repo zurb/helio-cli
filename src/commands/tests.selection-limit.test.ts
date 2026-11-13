@@ -60,6 +60,14 @@ describe('validateQuestions selection_limit', () => {
     }
   });
 
+  it('counts distinct choices against the limit', () => {
+    const errors = validateQuestions([
+      { type: 'multiple_choice', instructions: 'Pick', choices: ['a', 'a', 'A ', 'b'], allow_multiple: true, selection_limit: 3 },
+    ]);
+    expect(fields(errors)).toEqual(['selection_limit']);
+    expect(errors[0].message).toContain('(2)');
+  });
+
   it('treats null as no limit', () => {
     expect(validateQuestions(mc({ allow_multiple: true, selection_limit: null }))).toEqual([]);
   });
@@ -122,13 +130,19 @@ describe('preview JSON and walkthrough', () => {
 
 let requests: { url: string; method: string; body: Record<string, unknown> | null }[];
 let logged: string[];
+let reply: Record<string, unknown>;
 
 beforeEach(() => {
   requests = [];
   logged = [];
+  reply = { section_id: 's-1', test_id: 't-1', selection_limit: 2 };
   vi.stubGlobal('fetch', vi.fn(async (url: string | URL, init?: RequestInit) => {
     requests.push({ url: String(url), method: init?.method ?? 'GET', body: init?.body ? JSON.parse(String(init.body)) : null });
-    return new Response(JSON.stringify({ section_id: 's-1', test_id: 't-1' }), { status: 200, headers: { 'content-type': 'application/json' } });
+    const isReport = String(url).includes('/report');
+    return new Response(JSON.stringify(isReport ? { error: 'not found' } : reply), {
+      status: isReport ? 404 : 200,
+      headers: { 'content-type': 'application/json' },
+    });
   }));
   vi.spyOn(console, 'log').mockImplementation((msg: unknown = '') => {
     logged.push(String(msg));
@@ -175,5 +189,69 @@ describe('--selection-limit', () => {
     await expect(run('tests', 'edit-question', 't-1', 's-1', '--selection-limit', '2')).rejects.toThrow();
     expect(requests).toHaveLength(0);
     exit.mockRestore();
+  });
+});
+
+describe('older Helio that drops selection_limit', () => {
+  const addArgs = ['tests', 'add-question', 't-1', '--type', 'multiple_choice', '--instructions', 'Pick',
+    '--choices', 'A', 'B', 'C', '--allow-multiple', '--selection-limit', '3'];
+
+  it('add-question is quiet when Helio echoes the limit', async () => {
+    reply = { section_id: 's-1', selection_limit: 3 };
+    await run(...addArgs);
+    expect(logged.join('\n')).not.toContain('ignores selection_limit');
+  });
+
+  it('add-question warns when the echo is missing', async () => {
+    reply = { section_id: 's-1' };
+    await run(...addArgs);
+    expect(logged.join('\n')).toMatch(/ignores selection_limit.*not up to 3/);
+  });
+
+  it('edit-question puts the warning in JSON output', async () => {
+    reply = { section_id: 's-1' };
+    process.env.__HELIO_OUTPUT = 'json';
+    await run('tests', 'edit-question', 't-1', 's-1', '--type', 'multiple_choice', '--instructions', 'Pick',
+      '--choices', 'A', 'B', 'C', '--allow-multiple', '--selection-limit', '2');
+    expect(JSON.parse(logged.join('\n')).warnings).toHaveLength(1);
+  });
+
+  it('does not warn when no limit was sent', async () => {
+    reply = { section_id: 's-1' };
+    await run('tests', 'add-question', 't-1', '--type', 'multiple_choice', '--instructions', 'Pick',
+      '--choices', 'A', 'B', '--allow-multiple');
+    expect(logged.join('\n')).not.toContain('ignores selection_limit');
+  });
+});
+
+describe('tests preview text', () => {
+  const show = (extra: Record<string, unknown>) => ({
+    test: {
+      id: 't-1', name: 'N', status: 'draft', introduction: 'Hi',
+      sections: [{
+        id: 11, type: 'MultipleChoiceSection', position: 0, instructions: 'Pick', stripped_instructions: 'Pick',
+        likert_type: '',
+        variations: [{ id: 'v', name: 'V', type: 'MultipleChoiceVariation', choices: ['A', 'B', 'C', 'D'].map((text, position) => ({ id: text, text, position })) }],
+        ...extra,
+      }],
+    },
+  });
+
+  it('prints "select up to N" for a limited multi-select question', async () => {
+    reply = show({ enable_selection_limit: true, choice_selection_limit: 3 });
+    await run('tests', 'preview', 't-1');
+    expect(logged.some(l => l.includes('select up to 3'))).toBe(true);
+  });
+
+  it('prints "select any number" when there is no limit', async () => {
+    reply = show({ enable_selection_limit: false, choice_selection_limit: 4 });
+    await run('tests', 'preview', 't-1');
+    expect(logged.some(l => l.includes('select any number'))).toBe(true);
+  });
+
+  it('prints neither for single select', async () => {
+    reply = show({ enable_selection_limit: true, choice_selection_limit: 1 });
+    await run('tests', 'preview', 't-1');
+    expect(logged.some(l => /select up to|select any number/.test(l))).toBe(false);
   });
 });

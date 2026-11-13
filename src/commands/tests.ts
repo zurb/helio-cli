@@ -2093,6 +2093,21 @@ const SELECTION_LIMIT_ALIASES = ['choice_selection_limit', 'max_selections', 'ma
  * does (ZURB-4589): multiple_choice only, multi-select only, and 2 to the
  * number of choices. One answer is what a single-select question already is.
  */
+/**
+ * Helio versions before ZURB-4589 take selection_limit with a 200 and drop it,
+ * so "select up to 3" becomes "any number". Newer ones echo selection_limit
+ * from add_question and update_question (null when there is no limit), so a
+ * missing key after sending one means it didn't land.
+ */
+export function selectionLimitDropWarnings(question: QuestionInput, data: unknown): string[] {
+  if (question.selection_limit == null) return [];
+  if (data && typeof data === 'object' && 'selection_limit' in data) return [];
+  return [
+    `This Helio version ignores selection_limit, so participants can pick any number of answers, not up to ${question.selection_limit}. ` +
+      'It needs the Helio release with ZURB-4589; until then set the Selection Limit in the editor.',
+  ];
+}
+
 function validateSelectionLimit(q: QuestionInput, canonical: string, num: number, errors: ValidationError[]): void {
   for (const alias of SELECTION_LIMIT_ALIASES) {
     if (alias in q) {
@@ -2122,12 +2137,15 @@ function validateSelectionLimit(q: QuestionInput, canonical: string, num: number
     });
     return;
   }
-  const count = Array.isArray(q.choices) ? q.choices.length : null;
+  // Distinct choices: a limit of 3 on ["a", "a", "a"] can't mean anything.
+  const count = Array.isArray(q.choices)
+    ? new Set(q.choices.map(c => (typeof c === 'string' ? c.trim().toLowerCase() : JSON.stringify(c)))).size
+    : null;
   if (limit < 2 || (count != null && limit > count)) {
     errors.push({
       question: num,
       field: 'selection_limit',
-      message: `Must be between 2 and the number of choices${count != null ? ` (${count})` : ''}`,
+      message: `Must be between 2 and the number of distinct choices${count != null ? ` (${count})` : ''}`,
     });
   }
 }
@@ -4074,12 +4092,13 @@ export function registerTestsCommand(program: Command): void {
 
         const client = makeClient(program);
         const data = await client.post(`tests/${id}/questions/add_question`, question);
+        const addWarnings = selectionLimitDropWarnings(question, data);
         if (isJsonMode()) {
           // Faithful passthrough. Note that on the append path the API's
           // `position` is screen-based (question number + 1, counting the
           // intro card) and does NOT round-trip into --position. Tracked
           // upstream in zurb/helio.
-          printJson(data);
+          printJson(addWarnings.length ? { ...(data as Record<string, unknown>), warnings: addWarnings } : data);
         } else {
           console.log(`\x1b[32m✓\x1b[0m Added ${cmdOpts.type} question to test ${id}`);
           const shown = { ...(data as Record<string, unknown>) };
@@ -4094,6 +4113,7 @@ export function registerTestsCommand(program: Command): void {
               `  \x1b[90mappended to the end — re-run \x1b[0mtests order\x1b[90m for question numbers\x1b[0m`,
             );
           }
+          for (const w of addWarnings) console.log(`\x1b[33m⚠\x1b[0m ${w}`);
         }
       }),
     );
@@ -4274,12 +4294,14 @@ export function registerTestsCommand(program: Command): void {
 
         const client = makeClient(program);
         const data = await client.patch(`tests/${testId}/questions/${sectionId}/update_question`, question);
+        const editWarnings = selectionLimitDropWarnings(question, data);
         if (isJsonMode()) {
-          printJson(data);
+          printJson(editWarnings.length ? { ...(data as Record<string, unknown>), warnings: editWarnings } : data);
         } else {
           const verb = question.type ? 'Replaced' : 'Updated';
           console.log(`\x1b[32m✓\x1b[0m ${verb} question ${sectionId} on test ${testId}`);
           printKeyValue(data as Record<string, unknown>);
+          for (const w of editWarnings) console.log(`\x1b[33m⚠\x1b[0m ${w}`);
         }
       }),
     );
