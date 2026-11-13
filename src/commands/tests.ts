@@ -1541,7 +1541,7 @@ export function metricIntroCardDropWarnings(question: QuestionInput, data: unkno
   if (question.disable_instruction_card === undefined) return [];
   if (data && typeof data === 'object' && 'disable_instruction_card' in data) return [];
   return [
-    'This Helio version ignores --skip-question-intro on a UX metric section, so the introduction card was not changed. Set it in the Helio editor, or update Helio (ZURB-4590).',
+    `This Helio version ignores ${question.disable_instruction_card ? '--skip-question-intro' : '--no-skip-question-intro'} on a UX metric section, so the introduction card was not changed. Set it in the Helio editor, or update Helio (ZURB-4590).`,
   ];
 }
 
@@ -1585,7 +1585,8 @@ function validateUxMetricSectionOverrides(
       continue;
     }
 
-    if (overrides.disable_instruction_card != null && typeof overrides.disable_instruction_card !== 'boolean') {
+    // null too: the override path 400s on anything but true or false.
+    if ('disable_instruction_card' in overrides && typeof overrides.disable_instruction_card !== 'boolean') {
       errors.push({ question: 0, field: `${sectionField}.disable_instruction_card`, message: 'Must be true or false' });
     }
 
@@ -3696,7 +3697,7 @@ export function registerTestsCommand(program: Command): void {
     .option('--ux-metrics <types...>', 'UX metrics to add (auto-generates measurement questions; a type may be repeated, and each instance is scored separately). Click-backed and brand_score metrics need per-section overrides — see --ux-metrics-json.')
     .option(
       '--ux-metrics-json <json>',
-      'UX metrics as a JSON array or @path/to/file.json (object form: per-metric context, per-section instructions/assets/followups/hotspots/choices/brand_choice)',
+      'UX metrics as a JSON array or @path/to/file.json (object form: per-metric context, per-section instructions/assets/followups/hotspots/choices/brand_choice/randomize_choices/disable_instruction_card)',
     )
     .option('--ux-metric-context <text>', 'Replace generic nouns in UX metric instructions (e.g. "the Helio dashboard")')
     .option('--dry-run', 'Validate locally without creating the test')
@@ -4041,7 +4042,7 @@ export function registerTestsCommand(program: Command): void {
     .option('--site-link <url>', 'Site link URL (free_response and click_test on a --type replacement; also a safe edit on a UX metric section)')
     .option('--skip-question-intro', 'Skip the question introduction card (disable_instruction_card). On a regular question it goes with --type, and the replacement rebuilds the question, so pass it again to keep it. On a UX metric section (no --type) it is a safe edit on its own.')
     .option('--no-skip-question-intro', 'Show the question introduction card (the default)')
-    .option('--display-seconds <seconds>', 'Image display timer (5, 10 or 15; needs an image --asset-id). --type replacement only, and a replacement recreates the section, so pass it again to keep the timer.')
+    .option('--display-seconds <seconds>', 'Image display timer (5, 10 or 15; needs an image --asset-id). --type replacement only, and a replacement rebuilds the question from the flags given, so pass it again to keep the timer.')
     .option('--hotspots <json>', 'Hotspots as JSON array or @path/to/file.json, for a click_test question or a click section of a UX metric: [{name?, x, y, width, height, priority?}]. Replaces the existing set.')
     .option('--brand-choice <index>', '0-based index of the choice that is your brand (brand_score market recognition section only)')
     .option('--branching <json>', 'Branching as JSON array or @file (single-select multiple_choice; requires a Helio Enterprise account): [{choice, action: skip_to_question|end_test, question?|section_id?, message?, redirect_url?}]. Skips are forward-only.')
@@ -4223,7 +4224,7 @@ export function registerTestsCommand(program: Command): void {
     .option('--metrics <types...>', 'UX metric types to add')
     .option(
       '--metrics-json <json>',
-      'UX metrics as a JSON array or @path/to/file.json (object form: per-metric context, per-section instructions/assets/followups/hotspots/choices/brand_choice)',
+      'UX metrics as a JSON array or @path/to/file.json (object form: per-metric context, per-section instructions/assets/followups/hotspots/choices/brand_choice/randomize_choices/disable_instruction_card)',
     )
     .option('--ux-metrics <types...>', 'Alias for --metrics (matches tests create)')
     .option('--ux-metrics-json <json>', 'Alias for --metrics-json (matches tests create)')

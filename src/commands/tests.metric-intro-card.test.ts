@@ -76,6 +76,12 @@ describe('edit-question --skip-question-intro without --type', () => {
     expect(logged.join('\n')).toMatch(/ignores --skip-question-intro on a UX metric section/);
   });
 
+  it('names the --no- form in that warning when it was the one used', async () => {
+    reply = { status: 200, body: { section_id: 's-1', metric_type: 'sentiment' } };
+    await run('tests', 'edit-question', 't-1', 's-1', '--no-skip-question-intro');
+    expect(logged.join('\n')).toMatch(/ignores --no-skip-question-intro on a UX metric section/);
+  });
+
   it('puts the warning in JSON output', async () => {
     reply = { status: 200, body: { section_id: 's-1' } };
     process.env.__HELIO_OUTPUT = 'json';
@@ -115,8 +121,18 @@ describe('--ux-metrics-json section override disable_instruction_card', () => {
     expect(validateUxMetrics([{ type: 'sentiment', sections: [{ disable_instruction_card: true }] }])).toEqual([]);
   });
 
-  it('rejects anything else', () => {
-    const errors = validateUxMetrics([{ type: 'sentiment', sections: [{ disable_instruction_card: 'yes' }] }]);
-    expect(errors.map(e => e.field)).toEqual(['ux_metrics[0].sections[0].disable_instruction_card']);
+  it('rejects anything else, null included (the API 400s on it)', () => {
+    for (const value of ['yes', null]) {
+      const errors = validateUxMetrics([{ type: 'sentiment', sections: [{ disable_instruction_card: value }] }]);
+      expect(errors.map(e => e.field)).toEqual(['ux_metrics[0].sections[0].disable_instruction_card']);
+    }
+  });
+
+  it('is named in the --ux-metrics-json help', () => {
+    const program = new Command();
+    registerTestsCommand(program);
+    const create = program.commands.find(c => c.name() === 'tests')!.commands.find(c => c.name() === 'create')!;
+    const help = create.options.find(o => o.long === '--ux-metrics-json')!.description;
+    expect(help).toContain('disable_instruction_card');
   });
 });

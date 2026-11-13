@@ -11,7 +11,8 @@ Needs zurb/helio#5148 (ZURB-4590, introduction card on UX metric sections).
   metric section, and `--ux-metrics-json` section overrides take
   `disable_instruction_card`. The CLI used to reject both, because the API
   ignored the setting on metric sections. Against an older Helio the edit
-  comes back with a warning that it was not applied.
+  comes back with a warning that it was not applied. The create path can't
+  tell, so check `tests preview` after a `--ux-metrics-json` override.
 
 ### Changed
 - `edit-question` on a regular question without `--type` now explains that
