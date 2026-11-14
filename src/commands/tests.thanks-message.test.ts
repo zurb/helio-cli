@@ -136,6 +136,27 @@ describe('stripHtml', () => {
     expect(stripHtml('1 < 2 and 3 > 2')).toBe('1 < 2 and 3 > 2');
     expect(stripHtml('Q&amp;A &lt;beta&gt; &#39;now&#39;')).toBe("Q&A <beta> 'now'");
   });
+
+  it('decodes entities once, so an escaped entity stays literal', () => {
+    expect(stripHtml('&amp;#65; &amp;lt;')).toBe('&#65; &lt;');
+  });
+
+  it('decodes code points above U+FFFF instead of wrapping them', () => {
+    expect(stripHtml('&#128512;')).toBe('\u{1F600}');
+    // fromCharCode(65563) wrapped to 27, a real ESC.
+    expect(stripHtml('a&#65563;b')).toBe('a\u{1001B}b');
+    expect(stripHtml('a&#1114112;b&#55296;c')).toBe('a\uFFFDb\uFFFDc');
+  });
+
+  it('drops control characters that would act on the terminal', () => {
+    expect(stripHtml('&#27;[31mred&#27;[0m')).toBe('[31mred[0m');
+    expect(stripHtml('ding&#7; &#127;&#133;&#159;done')).toBe('ding done');
+    expect(stripHtml('raw\x1b[2Jclear\x00\r')).toBe('raw[2Jclear');
+  });
+
+  it('keeps tabs and newlines', () => {
+    expect(stripHtml('a&#9;b&#10;c\td\ne')).toBe('a\tb\nc\td\ne');
+  });
 });
 
 describe('--thanks-message "" (reset to the default)', () => {

@@ -19,7 +19,9 @@
 ### Fixed
 - Plain text read from Helio's HTML (question text, intro, the `Thanks:`
   line) keeps text that only looks like a tag, such as `<3`, and decodes
-  `&amp;`, `&lt;`, `&gt;`, `&quot;` and numeric entities.
+  `&amp;`, `&lt;`, `&gt;`, `&quot;` and numeric entities, once each. It drops
+  control characters (other than tab and newline), so an entity like `&#27;`
+  can't send an escape sequence to the terminal.
 
 ## 0.13.0
 

@@ -700,16 +700,29 @@ function formatStatus(status: string): string {
 
 const HTML_ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
 
+// C0 controls other than tab and newline, DEL, and C1 (0x7f-0x9f). Printed to
+// a terminal they would act as escape sequences, so `&#27;[31m` in a question
+// could recolour or rewrite the screen.
+const CONTROL_CHARS = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/g;
+
 /**
  * Plain text from the editor's HTML. Only real tags (`<p>`, `</p>`, `<br/>`)
  * are removed, so text like "<3 ... >" survives, and the common entities are
- * decoded so `&amp;` prints as `&`.
+ * decoded so `&amp;` prints as `&`. Entities are decoded in one pass, so
+ * `&amp;#65;` prints as `&#65;`. A numeric entity outside Unicode (or a lone
+ * surrogate) becomes U+FFFD, and control characters are dropped, whether they
+ * came from an entity or arrived raw.
  */
 export function stripHtml(html: string): string {
   return html
     .replace(/<\/?[a-zA-Z][^>]*>/g, '')
-    .replace(/&(amp|lt|gt|quot|apos|nbsp);/g, (_, name: string) => HTML_ENTITIES[name])
-    .replace(/&#(\d+);/g, (_, code: string) => String.fromCharCode(Number(code)))
+    .replace(/&(?:(amp|lt|gt|quot|apos|nbsp)|#(\d+));/g, (_, name: string | undefined, code: string | undefined) => {
+      if (name) return HTML_ENTITIES[name];
+      const point = Number(code);
+      if (point > 0x10ffff || (point >= 0xd800 && point <= 0xdfff)) return '\uFFFD';
+      return String.fromCodePoint(point);
+    })
+    .replace(CONTROL_CHARS, '')
     .trim();
 }
 
