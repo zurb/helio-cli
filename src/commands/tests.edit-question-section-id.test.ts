@@ -6,24 +6,22 @@ import { registerTestsCommand, sectionIdChangeWarning } from './tests.js';
 // `edit-question --type` used to give the question a new section id, and
 // Helio deleted every skip rule on other questions that pointed at the old one
 // (ZURB-4587). Helio now rebuilds the question on the same section, so the id
-// comes back unchanged. Against an older Helio the CLI can still see the
-// change: the response's section_id differs from the one it asked for.
+// comes back unchanged. If a different section_id ever comes back, the CLI
+// says so, since the rules that pointed at the old one may be gone.
 
 const SECTION = '01JSECTIONUUIDAAAAAAAAAAAA';
 let logged: string[];
 let returnedSectionId: string;
-let returnedNumericId: number | undefined;
 let lastRequest: { url: string; method: string; body: unknown } | null;
 
 beforeEach(() => {
   logged = [];
   returnedSectionId = SECTION;
-  returnedNumericId = undefined;
   lastRequest = null;
   vi.stubGlobal('fetch', vi.fn(async (url: string | URL, init?: RequestInit) => {
     lastRequest = { url: String(url), method: init?.method ?? 'GET', body: init?.body ? JSON.parse(String(init.body)) : null };
     return new Response(
-      JSON.stringify({ section_id: returnedSectionId, id: returnedNumericId, type: 'NPS', instructions: 'Updated', position: 3, test_id: 'test-1' }),
+      JSON.stringify({ section_id: returnedSectionId, type: 'NPS', instructions: 'Updated', position: 3, test_id: 'test-1' }),
       { status: 200, headers: { 'content-type': 'application/json' } },
     );
   }));
@@ -55,22 +53,17 @@ describe('sectionIdChangeWarning', () => {
     expect(sectionIdChangeWarning(SECTION, { section_id: SECTION })).toBeNull();
   });
 
-  it('warns when an older Helio hands back a new id', () => {
+  it('warns when a different section id comes back', () => {
     const warning = sectionIdChangeWarning(SECTION, { section_id: '01JNEWSECTIONUUIDBBBBBBBBB' });
     expect(warning).toContain('01JNEWSECTIONUUIDBBBBBBBBB');
-    expect(warning).toContain('skip rules');
+    expect(warning).toContain('Skip rules');
+    expect(warning).not.toMatch(/version/i);
   });
 
-  // tests preview and GET /tests/:id show numeric section ids, so that is
-  // what gets copied into edit-question.
-  it('compares a numeric id with the numeric id Helio echoes, as strings', () => {
-    expect(sectionIdChangeWarning('4512', { section_id: SECTION, id: 4512 })).toBeNull();
-    expect(sectionIdChangeWarning('4512', { section_id: SECTION, id: '4512' })).toBeNull();
-    expect(sectionIdChangeWarning('4512', { section_id: SECTION, id: 4513 })).toContain('new section id');
-  });
-
-  it('warns for a numeric id when an older Helio sends no numeric id back', () => {
-    expect(sectionIdChangeWarning('4512', { section_id: '01JNEWSECTIONUUIDBBBBBBBBB' })).toContain('skip rules');
+  // tests preview shows numeric section ids, and the response names the
+  // section by uuid, so the two can't be compared.
+  it('does not check a numeric id against the uuid', () => {
+    expect(sectionIdChangeWarning('4512', { section_id: SECTION })).toBeNull();
   });
 
   it('is quiet when the response has no section_id', () => {
@@ -90,7 +83,7 @@ describe('tests edit-question --type', () => {
   it('warns in text output when the id changed', async () => {
     returnedSectionId = '01JNEWSECTIONUUIDBBBBBBBBB';
     await run('tests', 'edit-question', 'test-1', SECTION, '--type', 'nps', '--instructions', 'Updated');
-    expect(logged.some(l => l.includes('⚠') && l.includes('new section id'))).toBe(true);
+    expect(logged.some(l => l.includes('⚠') && l.includes('different section id'))).toBe(true);
   });
 
   it('adds the warning to JSON output when the id changed', async () => {
@@ -109,15 +102,9 @@ describe('tests edit-question --type', () => {
     expect(out.warnings).toBeUndefined();
   });
 
-  it('warns for a numeric id copied from preview when an older Helio rebuilt the section', async () => {
-    returnedSectionId = '01JNEWSECTIONUUIDBBBBBBBBB';
+  it('is quiet for a numeric id copied from preview', async () => {
     await run('tests', 'edit-question', 'test-1', '4512', '--type', 'nps', '--instructions', 'Updated');
-    expect(logged.some(l => l.includes('⚠') && l.includes('new section id'))).toBe(true);
-  });
-
-  it('is quiet for a numeric id that Helio echoes back unchanged', async () => {
-    returnedNumericId = 4512;
-    await run('tests', 'edit-question', 'test-1', '4512', '--type', 'nps', '--instructions', 'Updated');
+    expect(lastRequest?.url).toContain('/tests/test-1/questions/4512/update_question');
     expect(logged.some(l => l.includes('⚠'))).toBe(false);
   });
 

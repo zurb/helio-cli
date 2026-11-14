@@ -3,20 +3,18 @@
 ## Unreleased
 
 ### Fixed
-- **`edit-question --type` keeps the question's section id, and the skip rules
-  that point at it.** Helio used to destroy the section and insert a new one,
-  which deleted every branching rule on another question that skipped to it,
-  without an error. With zurb/helio#5144 (ZURB-4587) the API rebuilds the question on
-  the same section, so the id that comes back is the one you sent and those
-  rules survive. Everything about the question itself still comes from the
-  call (pass `--skip-question-intro`, `--display-seconds`, `--branching` and
-  so on again to keep them). The help text, `guide` and README say so.
-- Against an older Helio, a `--type` edit that comes back with a different
-  section id now prints a warning (and adds `warnings` to `--output json`)
-  telling you to check the branching in `tests preview`. This works for the
-  numeric section id `tests preview` shows as well as the uuid: Helio with
-  ZURB-4587 echoes the numeric `id`, and a response without one comes from an
-  older Helio. ZURB-4587.
+- **`edit-question --type` keeps the question's position, section id and the
+  skip rules that point at it.** Helio used to destroy the section and insert
+  a new one, which deleted every branching rule on another question that
+  skipped to it, without an error. zurb/helio#5144 (ZURB-4587) rebuilds the
+  question on the same section, so the id that comes back is the one you sent
+  and those rules survive. Everything about the question itself still comes
+  from the call (pass `--skip-question-intro`, `--display-seconds`,
+  `--branching` and so on again to keep them). The help text, `guide` and
+  README say so.
+- If a `--type` edit ever comes back with a different section uuid, the CLI
+  prints a warning (and adds `warnings` to `--output json`) to check the
+  branching in `tests preview`.
 
 ## 0.13.0
 
