@@ -15,7 +15,8 @@ Needs zurb/helio#5147 (ZURB-4589, selection_limit on the Public API).
   `add-question` and `edit-question` warn when the response doesn't echo
   `selection_limit` back (text, and `warnings` in `--output json`); after
   `tests create`, check `tests preview`.
-- The limit is checked against the number of distinct choices.
+- The limit is checked against the number of choices as sent, the same
+  count the API uses.
 
 ### Fixed
 - **`tests preview` and `tests walkthrough` read multi-select back

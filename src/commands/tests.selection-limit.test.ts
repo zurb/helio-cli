@@ -60,12 +60,19 @@ describe('validateQuestions selection_limit', () => {
     }
   });
 
-  it('counts distinct choices against the limit', () => {
+  it('counts the choices as sent, the way the API does', () => {
+    // Helio checks choices.length, so choices that differ only in case or
+    // spacing still count. Rejecting them here would block a valid request.
+    expect(
+      validateQuestions([
+        { type: 'multiple_choice', instructions: 'Pick', choices: ['a', 'A', 'b'], allow_multiple: true, selection_limit: 3 },
+      ]),
+    ).toEqual([]);
     const errors = validateQuestions([
-      { type: 'multiple_choice', instructions: 'Pick', choices: ['a', 'a', 'A ', 'b'], allow_multiple: true, selection_limit: 3 },
+      { type: 'multiple_choice', instructions: 'Pick', choices: ['a', 'A', 'b'], allow_multiple: true, selection_limit: 4 },
     ]);
     expect(fields(errors)).toEqual(['selection_limit']);
-    expect(errors[0].message).toContain('(2)');
+    expect(errors[0].message).toContain('number of choices (3)');
   });
 
   it('treats null as no limit', () => {

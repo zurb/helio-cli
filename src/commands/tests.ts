@@ -2089,11 +2089,6 @@ export function validateQuestions(
 const SELECTION_LIMIT_ALIASES = ['choice_selection_limit', 'max_selections', 'max_choices', 'selection_max'];
 
 /**
- * "Select up to N" on a multiple choice question, checked the way the API
- * does (ZURB-4589): multiple_choice only, multi-select only, and 2 to the
- * number of choices. One answer is what a single-select question already is.
- */
-/**
  * Helio versions before ZURB-4589 take selection_limit with a 200 and drop it,
  * so "select up to 3" becomes "any number". Newer ones echo selection_limit
  * from add_question and update_question (null when there is no limit), so a
@@ -2108,6 +2103,11 @@ export function selectionLimitDropWarnings(question: QuestionInput, data: unknow
   ];
 }
 
+/**
+ * "Select up to N" on a multiple choice question, checked the way the API
+ * does (ZURB-4589): multiple_choice only, multi-select only, and 2 to the
+ * number of choices. One answer is what a single-select question already is.
+ */
 function validateSelectionLimit(q: QuestionInput, canonical: string, num: number, errors: ValidationError[]): void {
   for (const alias of SELECTION_LIMIT_ALIASES) {
     if (alias in q) {
@@ -2137,15 +2137,14 @@ function validateSelectionLimit(q: QuestionInput, canonical: string, num: number
     });
     return;
   }
-  // Distinct choices: a limit of 3 on ["a", "a", "a"] can't mean anything.
-  const count = Array.isArray(q.choices)
-    ? new Set(q.choices.map(c => (typeof c === 'string' ? c.trim().toLowerCase() : JSON.stringify(c)))).size
-    : null;
+  // The API counts the choices as sent (choices.length), so this does too:
+  // ["a", "A", "b"] takes a limit of 3.
+  const count = Array.isArray(q.choices) ? q.choices.length : null;
   if (limit < 2 || (count != null && limit > count)) {
     errors.push({
       question: num,
       field: 'selection_limit',
-      message: `Must be between 2 and the number of distinct choices${count != null ? ` (${count})` : ''}`,
+      message: `Must be between 2 and the number of choices${count != null ? ` (${count})` : ''}`,
     });
   }
 }
