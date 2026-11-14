@@ -66,7 +66,7 @@ export const QUESTION_TYPES = {
     creatable: true,
     also_accepts: 'MultipleChoice',
     required: ['type', 'instructions', 'choices'],
-    optional: ['allow_multiple', 'randomize_choices', 'branching', 'asset_id', 'disable_instruction_card', 'display_seconds'],
+    optional: ['allow_multiple', 'selection_limit', 'randomize_choices', 'branching', 'asset_id', 'disable_instruction_card', 'display_seconds'],
     example: {
       type: 'multiple_choice',
       instructions: 'How did you hear about us?',
@@ -75,7 +75,7 @@ export const QUESTION_TYPES = {
       randomize_choices: false,
     },
     notes:
-      'branching (single-select only, mutually exclusive with followup, requires a Helio Enterprise plan): [{choice: 0, action: "skip_to_question", question: 3}, {choice: 1, action: "end_test", message: "...", redirect_url: "..."}]. choice is a 0-based index; question is a 1-based question number and must be a LATER question (forward-only skips, matching the editor); on add/edit-question, section_id is also accepted (uuid or numeric id). end_test with message/redirect disqualifies with a custom end screen.',
+      'selection_limit: N makes a multi-select question "select up to N" (the editor\'s Selection Limit). It needs allow_multiple: true and runs from 2 to the number of choices; leave it out and participants can pick any number. branching (single-select only, mutually exclusive with followup, requires a Helio Enterprise plan): [{choice: 0, action: "skip_to_question", question: 3}, {choice: 1, action: "end_test", message: "...", redirect_url: "..."}]. choice is a 0-based index; question is a 1-based question number and must be a LATER question (forward-only skips, matching the editor); on add/edit-question, section_id is also accepted (uuid or numeric id). end_test with message/redirect disqualifies with a custom end screen.',
     summary_fields: 'results: [{id, text, percent, count}]',
     response_fields: 'selected: [{id, text}], text (if follow-up)',
   },
@@ -814,6 +814,27 @@ function printSectionQuestions(sections: SectionData[]): void {
 }
 
 /**
+ * How many answers a multiple choice question takes, read from the columns
+ * GET /tests/:id returns. The editor saves "no limit" as
+ * enable_selection_limit false, and a limit of N as enable_selection_limit
+ * true with choice_selection_limit N, where 1 is a single-select question.
+ * A payload that already says allow_multiple (other endpoints, fixtures)
+ * wins. Null for every other type.
+ */
+export function sectionSelection(s: SectionData): { allow_multiple: boolean; selection_limit: number | null } | null {
+  const canonical = RAW_TYPE_TO_CANONICAL[s.type] ?? s.type;
+  if (canonical !== 'multiple_choice') return null;
+  const raw = s as { allow_multiple?: unknown; enable_selection_limit?: unknown; choice_selection_limit?: unknown };
+  const limit = typeof raw.choice_selection_limit === 'number' ? raw.choice_selection_limit : null;
+  if (typeof raw.allow_multiple === 'boolean') {
+    return { allow_multiple: raw.allow_multiple, selection_limit: raw.allow_multiple && raw.enable_selection_limit === true && limit != null && limit > 1 ? limit : null };
+  }
+  if (raw.enable_selection_limit === false) return { allow_multiple: true, selection_limit: null };
+  if (raw.enable_selection_limit === true && limit != null && limit > 1) return { allow_multiple: true, selection_limit: limit };
+  return { allow_multiple: false, selection_limit: null };
+}
+
+/**
  * What a question shows alongside its text: the stimulus on its one variation,
  * and whether the introduction card that normally comes first is skipped. Both
  * are write fields, and a stimulus the API dropped is indistinguishable from
@@ -838,6 +859,14 @@ export function sectionStimulusLines(s: SectionData): string[] {
   }
   if (s.disable_instruction_card) {
     lines.push('      \x1b[90mⓘ skips the question introduction — opens straight on the stimulus and answers\x1b[0m');
+  }
+  const selection = sectionSelection(s);
+  if (selection?.allow_multiple) {
+    lines.push(
+      selection.selection_limit
+        ? `      \x1b[90m☐ select up to ${selection.selection_limit}\x1b[0m`
+        : '      \x1b[90m☐ select any number\x1b[0m',
+    );
   }
   return lines;
 }
@@ -1095,6 +1124,7 @@ export function buildQuestionsFromSections(sections: SectionData[] | undefined):
         disable_instruction_card: s.disable_instruction_card === true,
         // Same rule for the timer: only where a write would accept it.
         ...(TIMED_QUESTION_TYPES.has(canonical) ? { display_seconds: sectionDisplaySeconds(s) } : {}),
+        ...selectionWriteFields(s),
         // Metric-owned questions are auto-generated and structurally locked —
         // agents must not treat them as editable hand-written questions.
         ...(metric ? { ux_metric: { id: metric.id, type: metric.type } } : {}),
@@ -1126,8 +1156,18 @@ export function mergeSectionFieldsIntoReportQuestions(
       ...(STIMULUS_ASSET_TYPES.has(canonical) ? { asset_id: s.variations?.[0]?.asset_id ?? null } : {}),
       disable_instruction_card: s.disable_instruction_card === true,
       ...(TIMED_QUESTION_TYPES.has(canonical) ? { display_seconds: sectionDisplaySeconds(s) } : {}),
+      ...selectionWriteFields(s),
     };
   });
+}
+
+/** allow_multiple / selection_limit as a write takes them, on multiple choice only. */
+function selectionWriteFields(s: SectionData): Record<string, unknown> {
+  const selection = sectionSelection(s);
+  if (!selection) return {};
+  return selection.selection_limit
+    ? { allow_multiple: true, selection_limit: selection.selection_limit }
+    : { allow_multiple: selection.allow_multiple };
 }
 
 // Parses a JSON array from an inline string or @path/to/file.json, prefixing
@@ -1163,6 +1203,11 @@ export function parsePositiveInt(value: string | undefined, flagName: string): n
  * the same shape as a bad value in JSON.
  */
 function parseDisplaySecondsFlag(value: string): number | string {
+  return /^\s*\d+\s*$/.test(value) ? Number(value) : value;
+}
+
+/** Same idea for --selection-limit: validateQuestions reports a bad value. */
+function parseSelectionLimitFlag(value: string): number | string {
   return /^\s*\d+\s*$/.test(value) ? Number(value) : value;
 }
 
@@ -1204,6 +1249,8 @@ interface QuestionInput {
   scale_type?: string;
   custom_choices?: unknown[];
   allow_multiple?: boolean;
+  /** "Select up to N" on a multi-select multiple_choice question. */
+  selection_limit?: unknown;
   randomize_choices?: boolean;
   asset_id?: string;
   site_link?: string;
@@ -1859,6 +1906,8 @@ export function validateQuestions(
       errors.push({ question: num, field: 'disable_instruction_card', message: 'Must be true or false' });
     }
 
+    validateSelectionLimit(q, canonical, num, errors);
+
     validateDisplaySeconds(q, canonical, num, errors);
 
     // Type-specific validation
@@ -2032,6 +2081,57 @@ export function validateQuestions(
   }
 
   return errors;
+}
+
+// Names an agent reaches for when it wants "select up to N". GET /tests/:id
+// returns choice_selection_limit, which makes it look writable; none of these
+// is, and the API drops them without an error.
+const SELECTION_LIMIT_ALIASES = ['choice_selection_limit', 'max_selections', 'max_choices', 'selection_max'];
+
+/**
+ * "Select up to N" on a multiple choice question, checked the way the API
+ * does (ZURB-4589): multiple_choice only, multi-select only, and 2 to the
+ * number of choices. One answer is what a single-select question already is.
+ */
+function validateSelectionLimit(q: QuestionInput, canonical: string, num: number, errors: ValidationError[]): void {
+  for (const alias of SELECTION_LIMIT_ALIASES) {
+    if (alias in q) {
+      errors.push({
+        question: num,
+        field: alias,
+        message: 'Not a write field, so the API would drop it. For "select up to N" send selection_limit: N with allow_multiple: true',
+      });
+    }
+  }
+
+  const limit = q.selection_limit;
+  if (limit == null) return;
+  if (canonical !== 'multiple_choice') {
+    errors.push({ question: num, field: 'selection_limit', message: 'Only multiple_choice questions take a selection limit' });
+    return;
+  }
+  if (typeof limit !== 'number' || !Number.isInteger(limit)) {
+    errors.push({ question: num, field: 'selection_limit', message: 'Must be a whole number' });
+    return;
+  }
+  if (q.allow_multiple !== true) {
+    errors.push({
+      question: num,
+      field: 'selection_limit',
+      message: 'Needs allow_multiple: true. A single-select question already allows one answer',
+    });
+    return;
+  }
+  // The API counts the choices as sent (choices.length), so this does too:
+  // ["a", "A", "b"] takes a limit of 3.
+  const count = Array.isArray(q.choices) ? q.choices.length : null;
+  if (limit < 2 || (count != null && limit > count)) {
+    errors.push({
+      question: num,
+      field: 'selection_limit',
+      message: `Must be between 2 and the number of choices${count != null ? ` (${count})` : ''}`,
+    });
+  }
 }
 
 /**
@@ -2544,6 +2644,8 @@ export type WalkthroughScreen =
       preference_options?: PreferenceOption[];
       randomize_choices: boolean;
       allow_multiple: boolean;
+      /** "Select up to N" on a multi-select question; omitted when there is no limit. */
+      selection_limit?: number;
       scale_type?: string;
       ux_metric?: string;
       site_link?: string;
@@ -2637,7 +2739,8 @@ export function buildWalkthroughScreens(test: TestShowResponse): WalkthroughScre
 
     const uxMetric = sectionMetric(s)?.type;
     const randomize = Boolean((s as { randomize_choices?: unknown }).randomize_choices);
-    const allowMultiple = Boolean((s as { allow_multiple?: unknown }).allow_multiple);
+    const selection = sectionSelection(s);
+    const allowMultiple = selection?.allow_multiple ?? Boolean((s as { allow_multiple?: unknown }).allow_multiple);
 
     const assets: WalkthroughAsset[] = (s.variations ?? [])
       .filter(v => v.has_asset || v.asset_id != null || v.screenshot_url || v.thumb_url)
@@ -2663,6 +2766,7 @@ export function buildWalkthroughScreens(test: TestShowResponse): WalkthroughScre
       ...(options ? { preference_options: options } : {}),
       randomize_choices: randomize,
       allow_multiple: allowMultiple,
+      selection_limit: selection?.selection_limit ?? undefined,
       scale_type: s.likert_type || undefined,
       ux_metric: uxMetric,
       site_link: variation?.site_link || undefined,
@@ -2800,7 +2904,11 @@ export function renderWalkthroughScreen(screen: WalkthroughScreen): string[] {
         lines.push('  \x1b[90mⓘ choices randomized per participant\x1b[0m');
       }
       if (screen.allow_multiple) {
-        lines.push('  \x1b[90mⓘ multiple selections allowed\x1b[0m');
+        lines.push(
+          screen.selection_limit
+            ? `  \x1b[90mⓘ select up to ${screen.selection_limit}\x1b[0m`
+            : '  \x1b[90mⓘ multiple selections allowed\x1b[0m',
+        );
       }
       break;
     }
@@ -3056,9 +3164,10 @@ function inputHint(screen: WalkthroughScreen): string {
     case 'multiple_choice': {
       const max = Math.min(screen.choices.length, LETTERS.length);
       const range = max ? `${LETTERS[0]}–${LETTERS[max - 1]}` : '';
-      return screen.allow_multiple
-        ? `pick one or more (${range}, comma-separated), or ↵ to skip`
-        : `pick ${range}, or ↵ to skip`;
+      if (!screen.allow_multiple) return `pick ${range}, or ↵ to skip`;
+      return screen.selection_limit
+        ? `pick up to ${screen.selection_limit} (${range}, comma-separated), or ↵ to skip`
+        : `pick one or more (${range}, comma-separated), or ↵ to skip`;
     }
     case 'free_response':
       return 'type a response, or ↵ to skip';
@@ -3091,6 +3200,9 @@ function interpretAnswer(screen: WalkthroughScreen, raw: string): { ok: true; di
       if (picks.length === 0) return { ok: true, display: '' };
       if (!screen.allow_multiple && picks.length > 1) {
         return { ok: false, message: 'This question only accepts one selection.' };
+      }
+      if (screen.selection_limit && picks.length > screen.selection_limit) {
+        return { ok: false, message: `This question accepts at most ${screen.selection_limit} selections.` };
       }
       const labels: string[] = [];
       for (const p of picks) {
@@ -3216,6 +3328,7 @@ export function walkthroughScreenJson(screen: WalkthroughScreen): Record<string,
     preference_options: screen.preference_options ?? null,
     randomize_choices: screen.randomize_choices,
     allow_multiple: screen.allow_multiple,
+    selection_limit: screen.selection_limit ?? null,
     scale_type: screen.scale_type ?? null,
     ux_metric: screen.ux_metric ?? null,
     site_link: screen.site_link ?? null,
@@ -3903,6 +4016,7 @@ export function registerTestsCommand(program: Command): void {
     .option('--scale-type <scale>', 'Scale type (for likert)')
     .option('--custom-choices <items...>', 'Custom scale labels (for likert with scale_type=custom)')
     .option('--allow-multiple', 'Allow multiple selections (for multiple_choice)')
+    .option('--selection-limit <n>', '"Select up to N" on a multiple_choice question (the editor\'s Selection Limit): 2 to the number of choices, with --allow-multiple')
     .option('--randomize-choices', 'Randomize choice order (for multiple_choice)')
     .option('--categories <items...>', 'Categories (for matrix, card_sort)')
     .option('--points <n>', 'Total points to allocate (for point_allocation)')
@@ -3931,6 +4045,7 @@ export function registerTestsCommand(program: Command): void {
         if (cmdOpts.scaleType) question.scale_type = cmdOpts.scaleType;
         if (cmdOpts.customChoices) question.custom_choices = cmdOpts.customChoices;
         if (cmdOpts.allowMultiple) question.allow_multiple = true;
+        if (cmdOpts.selectionLimit !== undefined) question.selection_limit = parseSelectionLimitFlag(cmdOpts.selectionLimit);
         if (cmdOpts.randomizeChoices) question.randomize_choices = true;
         if (cmdOpts.categories) question.categories = cmdOpts.categories;
         if (cmdOpts.points) question.points = parsePositiveInt(cmdOpts.points, '--points');
@@ -3998,6 +4113,7 @@ export function registerTestsCommand(program: Command): void {
     .option('--scale-type <scale>', 'Scale type (for likert)')
     .option('--custom-choices <items...>', 'Custom scale labels')
     .option('--allow-multiple', 'Allow multiple selections')
+    .option('--selection-limit <n>', '"Select up to N" (multiple_choice with --allow-multiple; 2 to the number of choices). --type replacement only, and a replacement rebuilds the question, so pass it again to keep it.')
     .option('--randomize-choices', 'Randomize choice order')
     .option('--no-randomize-choices', 'Disable randomized choice order')
     .option('--categories <items...>', 'Categories')
@@ -4034,6 +4150,7 @@ export function registerTestsCommand(program: Command): void {
         if (cmdOpts.scaleType) question.scale_type = cmdOpts.scaleType;
         if (cmdOpts.customChoices) question.custom_choices = cmdOpts.customChoices;
         if (cmdOpts.allowMultiple) question.allow_multiple = true;
+        if (cmdOpts.selectionLimit !== undefined) question.selection_limit = parseSelectionLimitFlag(cmdOpts.selectionLimit);
         if (cmdOpts.randomizeChoices !== undefined) question.randomize_choices = cmdOpts.randomizeChoices;
         if (cmdOpts.categories) question.categories = cmdOpts.categories;
         if (cmdOpts.points) question.points = parsePositiveInt(cmdOpts.points, '--points');
@@ -4104,6 +4221,7 @@ export function registerTestsCommand(program: Command): void {
             ['scale_type', '--scale-type'],
             ['custom_choices', '--custom-choices'],
             ['allow_multiple', '--allow-multiple'],
+            ['selection_limit', '--selection-limit'],
             ['categories', '--categories'],
             ['points', '--points'],
             ['points_label', '--points-label'],

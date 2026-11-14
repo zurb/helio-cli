@@ -611,7 +611,7 @@ export const GUIDE_JSON = {
           '--followup-for-choices <positions...>': '0-based choice positions that trigger the follow-up (multiple choice / likert only; needs --followup)',
         },
         type_specific: {
-          multiple_choice: ['--choices <items...> (min 2)', '--allow-multiple', '--randomize-choices', '--asset-id <id>'],
+          multiple_choice: ['--choices <items...> (min 2)', '--allow-multiple', '--selection-limit <n> ("select up to N"; 2..choices, with --allow-multiple)', '--randomize-choices', '--asset-id <id>'],
           likert: ['--scale-type <scale>', '--custom-choices <items...> (when scale-type=custom)', '--asset-id <id>'],
           nps: ['--asset-id <id>'],
           free_response: ['--asset-id <id>', '--site-link <url>'],
@@ -650,7 +650,7 @@ export const GUIDE_JSON = {
           '--remove-followup': 'Remove the existing follow-up (cannot combine with the other followup flags)',
         },
         type_specific: {
-          multiple_choice: ['--choices <items...> (min 2)', '--allow-multiple', '--randomize-choices', '--asset-id <id>'],
+          multiple_choice: ['--choices <items...> (min 2)', '--allow-multiple', '--selection-limit <n> ("select up to N"; 2..choices, with --allow-multiple)', '--randomize-choices', '--asset-id <id>'],
           likert: ['--scale-type <scale>', '--custom-choices <items...> (when scale-type=custom)', '--asset-id <id>'],
           nps: ['--asset-id <id>'],
           free_response: ['--asset-id <id>', '--site-link <url>'],
@@ -794,7 +794,7 @@ export const GUIDE_JSON = {
   question_types: {
     creatable: {
       free_response: { also_accepts: 'FreeResponse', required: ['type', 'instructions'], optional: ['asset_id', 'site_link', 'disable_instruction_card', 'display_seconds'] },
-      multiple_choice: { also_accepts: 'MultipleChoice', required: ['type', 'instructions', 'choices (min 2)'], optional: ['allow_multiple', 'randomize_choices', 'asset_id', 'disable_instruction_card', 'display_seconds'] },
+      multiple_choice: { also_accepts: 'MultipleChoice', required: ['type', 'instructions', 'choices (min 2)'], optional: ['allow_multiple', 'selection_limit (2..choices, needs allow_multiple)', 'randomize_choices', 'asset_id', 'disable_instruction_card', 'display_seconds'] },
       likert: {
         also_accepts: 'Likert',
         required: ['type', 'instructions', 'scale_type'],

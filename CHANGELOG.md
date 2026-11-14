@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+Needs zurb/helio#5147 (ZURB-4589, selection_limit on the Public API).
+
+### Added
+- **"Select up to N" on multiple choice.** `--selection-limit <n>` on
+  `add-question` and `edit-question --type`, and `selection_limit` in
+  questions JSON, set the editor's Selection Limit. It needs
+  `allow_multiple: true` and runs from 2 to the number of choices.
+  `choice_selection_limit`, `max_selections`, `max_choices` and
+  `selection_max` are rejected with a pointer to `selection_limit`, since the
+  API ignores them. `tests preview` shows the saved limit.
+- The limit is checked against the number of choices as sent, the same
+  count the API uses.
+
+### Fixed
+- **`tests preview` and `tests walkthrough` read multi-select back
+  correctly.** GET returns `enable_selection_limit` and
+  `choice_selection_limit`, not `allow_multiple`, so a multi-select question
+  previewed and walked through as single-select. Preview now prints
+  `☐ select up to N` or `☐ select any number` and emits `allow_multiple` and
+  `selection_limit` as write keys. The walkthrough enforces the limit.
+
+### Changed (JSON output shape, additive)
+- `tests walkthrough --output json` screens gain `selection_limit` (a number,
+  or `null` when there is no limit).
+
 ## 0.13.0
 
 Ships against zurb/helio#5130 (report share link), ZURB-4548.

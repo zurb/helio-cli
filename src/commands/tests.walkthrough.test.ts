@@ -257,7 +257,7 @@ describe('walkthroughScreenJson', () => {
     expect(Object.keys(json[2]).sort()).toEqual([
       'allow_multiple', 'assets', 'branching', 'choices', 'disable_instruction_card', 'display_seconds', 'hotspots', 'kind',
       'position', 'preference_options', 'q_number', 'question', 'randomize_choices',
-      'raw_type', 'renderable', 'scale_type', 'site_link', 'type', 'type_label',
+      'raw_type', 'renderable', 'scale_type', 'selection_limit', 'site_link', 'type', 'type_label',
       'ux_metric',
     ]);
   });
