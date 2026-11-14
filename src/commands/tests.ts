@@ -3987,7 +3987,7 @@ export function registerTestsCommand(program: Command): void {
 
   cmd
     .command('edit-question <test-id> <section-id>')
-    .description('Replace a question on a draft test (or edit instructions/assets/choices/hotspots/brand-choice/randomize/follow-ups on a UX metric section)')
+    .description('Replace a question on a draft test, keeping its position, section id and the skip rules that point at it (or edit instructions/assets/choices/hotspots/brand-choice/randomize/follow-ups on a UX metric section)')
     .option('--type <type>', 'Question type (required for regular questions, omit for UX metric sections)')
     .option('--instructions <text>', 'Question text')
     .option('--choices <items...>', 'Choices')
@@ -4007,9 +4007,9 @@ export function registerTestsCommand(program: Command): void {
     .option('--can-skip-cards', 'Allow skipping cards')
     .option('--asset-id <id>', 'Stimulus asset ID (see add-question for the types that take one; also a safe edit on a UX metric section)')
     .option('--site-link <url>', 'Site link URL (free_response and click_test on a --type replacement; also a safe edit on a UX metric section)')
-    .option('--skip-question-intro', 'Skip the question introduction card (disable_instruction_card). --type replacement only, and a replacement recreates the section, so pass it again to keep it.')
+    .option('--skip-question-intro', 'Skip the question introduction card (disable_instruction_card). --type replacement only, and a replacement rebuilds the question from the flags given, so pass it again to keep it.')
     .option('--no-skip-question-intro', 'Show the question introduction card (the default)')
-    .option('--display-seconds <seconds>', 'Image display timer (5, 10 or 15; needs an image --asset-id). --type replacement only, and a replacement recreates the section, so pass it again to keep the timer.')
+    .option('--display-seconds <seconds>', 'Image display timer (5, 10 or 15; needs an image --asset-id). --type replacement only, and a replacement rebuilds the question from the flags given, so pass it again to keep the timer.')
     .option('--hotspots <json>', 'Hotspots as JSON array or @path/to/file.json, for a click_test question or a click section of a UX metric: [{name?, x, y, width, height, priority?}]. Replaces the existing set.')
     .option('--brand-choice <index>', '0-based index of the choice that is your brand (brand_score market recognition section only)')
     .option('--branching <json>', 'Branching as JSON array or @file (single-select multiple_choice; requires a Helio Enterprise account): [{choice, action: skip_to_question|end_test, question?|section_id?, message?, redirect_url?}]. Skips are forward-only.')
