@@ -1533,19 +1533,6 @@ export function regularQuestionNeedsTypeHint(err: unknown, question: QuestionInp
 }
 
 /**
- * Helio versions before ZURB-4590 answer a metric-section edit with 200 and
- * ignore disable_instruction_card. Newer ones echo it back, so a missing key
- * means the setting was dropped.
- */
-export function metricIntroCardDropWarnings(question: QuestionInput, data: unknown): string[] {
-  if (question.disable_instruction_card === undefined) return [];
-  if (data && typeof data === 'object' && 'disable_instruction_card' in data) return [];
-  return [
-    `This Helio version ignores ${question.disable_instruction_card ? '--skip-question-intro' : '--no-skip-question-intro'} on a UX metric section, so the introduction card was not changed. Set it in the Helio editor, or update Helio (ZURB-4590).`,
-  ];
-}
-
-/**
  * Per-section overrides on the UX metric object form. Beyond shape, these catch
  * the two ways an override silently produces a metric that scores zero: a
  * hotspot-scored click section with no hotspots, and a brand_score whose brand
@@ -4190,14 +4177,12 @@ export function registerTestsCommand(program: Command): void {
         } catch (err) {
           throw regularQuestionNeedsTypeHint(err, question) ?? err;
         }
-        const warnings = question.type ? [] : metricIntroCardDropWarnings(question, data);
         if (isJsonMode()) {
-          printJson(warnings.length ? { ...(data as Record<string, unknown>), warnings } : data);
+          printJson(data);
         } else {
           const verb = question.type ? 'Replaced' : 'Updated';
           console.log(`\x1b[32m✓\x1b[0m ${verb} question ${sectionId} on test ${testId}`);
           printKeyValue(data as Record<string, unknown>);
-          for (const w of warnings) console.log(`\x1b[33m⚠\x1b[0m ${w}`);
         }
       }),
     );

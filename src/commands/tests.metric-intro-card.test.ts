@@ -4,7 +4,6 @@ import {
   registerTestsCommand,
   validateUxMetrics,
   regularQuestionNeedsTypeHint,
-  metricIntroCardDropWarnings,
 } from './tests.js';
 import { HelioApiError } from '../types.js';
 
@@ -12,9 +11,7 @@ import { HelioApiError } from '../types.js';
 // "Skip question introduction" (disable_instruction_card) could be set on a
 // hand-written question but not on a UX metric section: the API's metric edit
 // path and its create-time section overrides never read it, so the CLI
-// refused the flag there (ZURB-4590). Helio now accepts it in both places and
-// echoes it back from the metric edit, so a missing key in the response means
-// an older Helio dropped it.
+// refused the flag there (ZURB-4590). Helio now accepts it in both places.
 
 let requests: { url: string; method: string; body: Record<string, unknown> | null }[];
 let logged: string[];
@@ -70,24 +67,11 @@ describe('edit-question --skip-question-intro without --type', () => {
     expect(requests[0].body).toEqual({ disable_instruction_card: false });
   });
 
-  it('warns when an older Helio answers without echoing the setting', async () => {
-    reply = { status: 200, body: { section_id: 's-1', metric_type: 'sentiment' } };
-    await run('tests', 'edit-question', 't-1', 's-1', '--skip-question-intro');
-    expect(logged.join('\n')).toMatch(/ignores --skip-question-intro on a UX metric section/);
-  });
-
-  it('names the --no- form in that warning when it was the one used', async () => {
-    reply = { status: 200, body: { section_id: 's-1', metric_type: 'sentiment' } };
-    await run('tests', 'edit-question', 't-1', 's-1', '--no-skip-question-intro');
-    expect(logged.join('\n')).toMatch(/ignores --no-skip-question-intro on a UX metric section/);
-  });
-
-  it('puts the warning in JSON output', async () => {
-    reply = { status: 200, body: { section_id: 's-1' } };
+  it('passes the response through to JSON output', async () => {
+    reply = { status: 200, body: { section_id: 's-1', disable_instruction_card: true } };
     process.env.__HELIO_OUTPUT = 'json';
     await run('tests', 'edit-question', 't-1', 's-1', '--skip-question-intro');
-    const out = JSON.parse(logged.join('\n'));
-    expect(out.warnings).toHaveLength(1);
+    expect(JSON.parse(logged.join('\n'))).toEqual({ section_id: 's-1', disable_instruction_card: true });
   });
 
   it('explains what to do when the section is a regular question', async () => {
@@ -104,15 +88,6 @@ describe('regularQuestionNeedsTypeHint', () => {
     expect(regularQuestionNeedsTypeHint(new HelioApiError(400, { error: 'Section not found.' }), {})).toBeNull();
     expect(regularQuestionNeedsTypeHint(new HelioApiError(400, { error: 'no question type found' }), { type: 'nps' })).toBeNull();
     expect(regularQuestionNeedsTypeHint(new Error('no question type found'), {})).toBeNull();
-  });
-});
-
-describe('metricIntroCardDropWarnings', () => {
-  it('only fires when the flag was sent and the key is missing', () => {
-    expect(metricIntroCardDropWarnings({}, {})).toEqual([]);
-    expect(metricIntroCardDropWarnings({ disable_instruction_card: true }, { disable_instruction_card: true })).toEqual([]);
-    expect(metricIntroCardDropWarnings({ disable_instruction_card: false }, { disable_instruction_card: false })).toEqual([]);
-    expect(metricIntroCardDropWarnings({ disable_instruction_card: true }, { section_id: 's' })).toHaveLength(1);
   });
 });
 

@@ -10,9 +10,8 @@ Needs zurb/helio#5148 (ZURB-4590, introduction card on UX metric sections).
   `--no-skip-question-intro`) now works without `--type`, as a safe edit on a
   metric section, and `--ux-metrics-json` section overrides take
   `disable_instruction_card`. The CLI used to reject both, because the API
-  ignored the setting on metric sections. Against an older Helio the edit
-  comes back with a warning that it was not applied. The create path can't
-  tell, so check `tests preview` after a `--ux-metrics-json` override.
+  ignored the setting on metric sections. An override value must be `true`
+  or `false`; `null` is rejected before sending, as the API would 400 on it.
 
 ### Changed
 - `edit-question` on a regular question without `--type` now explains that
