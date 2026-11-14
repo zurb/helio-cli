@@ -199,35 +199,13 @@ describe('--selection-limit', () => {
   });
 });
 
-describe('older Helio that drops selection_limit', () => {
-  const addArgs = ['tests', 'add-question', 't-1', '--type', 'multiple_choice', '--instructions', 'Pick',
-    '--choices', 'A', 'B', 'C', '--allow-multiple', '--selection-limit', '3'];
-
-  it('add-question is quiet when Helio echoes the limit', async () => {
+describe('selection_limit response', () => {
+  it('add-question passes the response through without warnings', async () => {
     reply = { section_id: 's-1', selection_limit: 3 };
-    await run(...addArgs);
-    expect(logged.join('\n')).not.toContain('ignores selection_limit');
-  });
-
-  it('add-question warns when the echo is missing', async () => {
-    reply = { section_id: 's-1' };
-    await run(...addArgs);
-    expect(logged.join('\n')).toMatch(/ignores selection_limit.*not up to 3/);
-  });
-
-  it('edit-question puts the warning in JSON output', async () => {
-    reply = { section_id: 's-1' };
     process.env.__HELIO_OUTPUT = 'json';
-    await run('tests', 'edit-question', 't-1', 's-1', '--type', 'multiple_choice', '--instructions', 'Pick',
-      '--choices', 'A', 'B', 'C', '--allow-multiple', '--selection-limit', '2');
-    expect(JSON.parse(logged.join('\n')).warnings).toHaveLength(1);
-  });
-
-  it('does not warn when no limit was sent', async () => {
-    reply = { section_id: 's-1' };
     await run('tests', 'add-question', 't-1', '--type', 'multiple_choice', '--instructions', 'Pick',
-      '--choices', 'A', 'B', '--allow-multiple');
-    expect(logged.join('\n')).not.toContain('ignores selection_limit');
+      '--choices', 'A', 'B', 'C', '--allow-multiple', '--selection-limit', '3');
+    expect(JSON.parse(logged.join('\n'))).toEqual({ section_id: 's-1', selection_limit: 3 });
   });
 });
 
