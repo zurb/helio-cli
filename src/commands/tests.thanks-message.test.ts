@@ -1,14 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Command } from 'commander';
-import { registerTestsCommand, customThanksMessage, thanksMessageDropWarning, stripHtml, type TestShowResponse } from './tests.js';
+import { registerTestsCommand, customThanksMessage, stripHtml, type TestShowResponse } from './tests.js';
 
 // ─── Contract ────────────────────────────────────────────────────────────────
 // The end-of-test thank-you message (thanks_message) was read back by
 // GET /tests/:id but never written by POST /tests or PATCH /tests/:id, and the
 // CLI had no flag for it, so a session asking for one got a 200 and the
-// default message (ZURB-4588). Since the API fix both writes take it, and
-// both responses echo it back, which is how the CLI tells an older API that
-// dropped it.
+// default message (ZURB-4588). Since the API fix both writes take it.
 
 let logged: string[];
 let requests: { url: string; method: string; body: Record<string, unknown> | null }[];
@@ -83,43 +81,25 @@ describe('customThanksMessage', () => {
   });
 });
 
-describe('thanksMessageDropWarning', () => {
-  it('is quiet when nothing was sent', () => {
-    expect(thanksMessageDropWarning(false, {})).toBeNull();
-  });
-
-  it('is quiet when the response echoes the field, null included', () => {
-    expect(thanksMessageDropWarning(true, { thanks_message: 'Thanks' })).toBeNull();
-    expect(thanksMessageDropWarning(true, { thanks_message: null })).toBeNull();
-  });
-
-  it('warns when an older API leaves it out', () => {
-    expect(thanksMessageDropWarning(true, { test_id: 't' })).toContain('ignores thanks_message');
-  });
-});
-
 describe('tests create --thanks-message', () => {
 
   it('sends thanks_message in the create body', async () => {
     responseBody = { test_id: 't-1', thanks_message: 'Thanks for your time' };
     await run(...createArgs, '--thanks-message', 'Thanks for your time');
     expect(writes()[0].body?.thanks_message).toBe('Thanks for your time');
-    expect(logged.some(l => l.includes('ignores thanks_message'))).toBe(false);
   });
 
   it('leaves it out when the flag is not given', async () => {
     responseBody = { test_id: 't-1' };
     await run(...createArgs);
     expect(writes()[0].body).not.toHaveProperty('thanks_message');
-    expect(logged.some(l => l.includes('ignores thanks_message'))).toBe(false);
   });
 
-  it('warns when an older API drops it', async () => {
+  it('adds no warnings to the JSON output', async () => {
     responseBody = { test_id: 't-1' };
     process.env.__HELIO_OUTPUT = 'json';
     await run(...createArgs, '--thanks-message', 'Thanks');
-    const out = JSON.parse(logged.join('\n'));
-    expect(out.warnings.some((w: string) => w.includes('ignores thanks_message'))).toBe(true);
+    expect(JSON.parse(logged.join('\n')).warnings).toBeUndefined();
   });
 
   it('shows it in --dry-run', async () => {
@@ -182,17 +162,10 @@ describe('--thanks-message "" (reset to the default)', () => {
     exit.mockRestore();
   });
 
-  it('update warns when an older API ignores the reset', async () => {
-    responseBody = { test_id: 't-1' };
-    await run('tests', 'update', 't-1', '--thanks-message', '');
-    expect(logged.some(l => l.includes('ignores thanks_message'))).toBe(true);
-  });
-
-  it('create sends it, and an older API that ignores it is not worth a warning', async () => {
+  it('create sends it', async () => {
     responseBody = { test_id: 't-1' };
     await run(...createArgs, '--thanks-message', '');
     expect(writes()[0].body).toMatchObject({ thanks_message: '' });
-    expect(logged.some(l => l.includes('ignores thanks_message'))).toBe(false);
   });
 
   it('create --dry-run shows it as the default', async () => {
@@ -212,7 +185,6 @@ describe('tests update --thanks-message / --clear-thanks-message', () => {
     responseBody = { test_id: 't-1', thanks_message: null };
     await run('tests', 'update', 't-1', '--clear-thanks-message');
     expect(writes()[0].body).toEqual({ thanks_message: null });
-    expect(logged.some(l => l.includes('ignores thanks_message'))).toBe(false);
   });
 
   it('rejects both flags together before any request', async () => {
@@ -223,12 +195,6 @@ describe('tests update --thanks-message / --clear-thanks-message', () => {
     await expect(run('tests', 'update', 't-1', '--thanks-message', 'Bye', '--clear-thanks-message')).rejects.toThrow();
     expect(writes()).toHaveLength(0);
     exit.mockRestore();
-  });
-
-  it('warns when an older API drops it', async () => {
-    responseBody = { test_id: 't-1', name: 'N' };
-    await run('tests', 'update', 't-1', '--thanks-message', 'Bye');
-    expect(logged.some(l => l.includes('ignores thanks_message'))).toBe(true);
   });
 });
 

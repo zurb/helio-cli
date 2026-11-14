@@ -3267,20 +3267,6 @@ export function customThanksMessage(test: TestShowResponse): string | null {
   return text || null;
 }
 
-/**
- * Helio versions before ZURB-4588 take thanks_message with a 200 and drop it.
- * The ones that save it echo it back in the create and update responses, so a
- * missing key after sending one means it didn't land.
- */
-export function thanksMessageDropWarning(sent: boolean, data: unknown): string | null {
-  if (!sent) return null;
-  if (data && typeof data === 'object' && 'thanks_message' in data) return null;
-  return (
-    'This Helio version ignores thanks_message, so the thank-you message was not changed. ' +
-    'It needs the Helio release with ZURB-4588; until then set it in the editor (Thank You toggle).'
-  );
-}
-
 export function registerTestsCommand(program: Command): void {
   const cmd = program.command('tests').alias('t').description('Manage tests');
 
@@ -3941,12 +3927,9 @@ export function registerTestsCommand(program: Command): void {
         if (cmdOpts.thanksMessage !== undefined) body.thanks_message = cmdOpts.thanksMessage;
 
         const data = await client.post('tests', body);
-        // An empty message on create asks for the default, which an older Helio gives anyway.
-        const thanksWarning = thanksMessageDropWarning(Boolean(cmdOpts.thanksMessage?.trim()), data);
         const createWarnings = [
           ...excludeTestWarnings(cmdOpts.excludeTests),
           ...uxMetricWarnings(uxMetrics ?? []),
-          ...(thanksWarning ? [thanksWarning] : []),
         ];
         if (isJsonMode()) {
           printJson(createWarnings.length ? { ...(data as object), warnings: createWarnings } : data);
@@ -4581,8 +4564,7 @@ export function registerTestsCommand(program: Command): void {
         }
 
         const data = await client.patch(`tests/${id}`, body);
-        const thanksWarning = thanksMessageDropWarning('thanks_message' in body, data);
-        const warnings = [...excludeTestWarnings(cmdOpts.excludeTests), ...(thanksWarning ? [thanksWarning] : [])];
+        const warnings = excludeTestWarnings(cmdOpts.excludeTests);
         if (isJsonMode()) {
           printJson(warnings.length ? { ...(data as object), warnings } : data);
         } else {
