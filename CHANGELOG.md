@@ -12,9 +12,6 @@
   from the call (pass `--skip-question-intro`, `--display-seconds`,
   `--branching` and so on again to keep them). The help text, `guide` and
   README say so.
-- If a `--type` edit ever comes back with a different section uuid, the CLI
-  prints a warning (and adds `warnings` to `--output json`) to check the
-  branching in `tests preview`.
 
 ## 0.13.0
 

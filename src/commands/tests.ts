@@ -3228,23 +3228,6 @@ export function walkthroughScreenJson(screen: WalkthroughScreen): Record<string,
   };
 }
 
-/**
- * A `--type` replacement keeps the question's section: Helio rebuilds it on the
- * same row (ZURB-4587), so the uuid it returns as section_id is the one sent,
- * and skip rules on other questions that point at it survive. If a different
- * uuid ever comes back, those rules may be gone, so say so. A numeric id (what
- * `tests preview` shows) can't be compared with the uuid, so it isn't checked.
- */
-export function sectionIdChangeWarning(requestedId: string, data: unknown): string | null {
-  const returned = (data as { section_id?: unknown } | null)?.section_id;
-  const requested = String(requestedId);
-  if (returned == null || /^\d+$/.test(requested) || String(returned) === requested) return null;
-  return (
-    `Helio returned a different section id (${String(returned)}) for this question. Skip rules on other ` +
-    'questions that pointed at the old id may be gone, so check the branching in `tests preview`.'
-  );
-}
-
 export function registerTestsCommand(program: Command): void {
   const cmd = program.command('tests').alias('t').description('Manage tests');
 
@@ -4175,14 +4158,12 @@ export function registerTestsCommand(program: Command): void {
 
         const client = makeClient(program);
         const data = await client.patch(`tests/${testId}/questions/${sectionId}/update_question`, question);
-        const warning = question.type ? sectionIdChangeWarning(sectionId, data) : null;
         if (isJsonMode()) {
-          printJson(warning ? { ...(data as object), warnings: [warning] } : data);
+          printJson(data);
         } else {
           const verb = question.type ? 'Replaced' : 'Updated';
           console.log(`\x1b[32m✓\x1b[0m ${verb} question ${sectionId} on test ${testId}`);
           printKeyValue(data as Record<string, unknown>);
-          if (warning) console.log(`\n  \x1b[33m⚠\x1b[0m ${warning}`);
         }
       }),
     );
