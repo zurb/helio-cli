@@ -625,7 +625,7 @@ export const GUIDE_JSON = {
         note: 'Validates the question before sending. Easier than building a full JSON array.',
       },
       'edit-question': {
-        description: 'Replace a question on a draft test (keeps its position and section id), or edit safe fields on a UX metric section',
+        description: 'Replace a question on a draft test (keeps its position, and its section id on Helio versions with ZURB-4587), or edit safe fields on a UX metric section',
         args: '<test-id> <section-id>',
         modes: {
           regular_question: {
