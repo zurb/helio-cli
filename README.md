@@ -120,6 +120,8 @@ helio-cli tests create --dry-run \
 
 No hand-written NPS in that example on purpose: `--ux-metrics loyalty` builds it, and unlike a typed-out NPS it scores.
 
+`--thanks-message "<text>"` on `create` or `update` sets the message participants see when they finish (the editor's Thank You message); `update --clear-thanks-message` (or `--thanks-message ""`) goes back to Helio's default. `tests preview` prints it as `Thanks:`.
+
 **Starting stacks** — from the Helio test corpus, if you don't know which metrics to pick:
 
 | Situation | Metrics | Note |
