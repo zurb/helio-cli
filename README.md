@@ -120,6 +120,8 @@ helio-cli tests create --dry-run \
 
 No hand-written NPS in that example on purpose: `--ux-metrics loyalty` builds it, and unlike a typed-out NPS it scores.
 
+`--thanks-message "<text>"` on `create` or `update` sets the message participants see when they finish (the editor's Thank You message); `update --clear-thanks-message` (or `--thanks-message ""`) goes back to Helio's default. `tests preview` prints it as `Thanks:`.
+
 **Starting stacks** — from the Helio test corpus, if you don't know which metrics to pick:
 
 | Situation | Metrics | Note |
@@ -220,7 +222,9 @@ Uploads return immediately with `status: "processing"`; poll `assets get <asset-
 
 A question-level `--asset-id` is the stimulus shown with the question, and `free_response`, `multiple_choice`, `likert`, `nps`, `ranking`, `matrix`, `point_allocation`, `max_diff` and `click_test` all take one. Preference questions carry their images per option instead (`--variations`) and card sort has no stimulus slot, so both reject it. `--site-link` is saved on `free_response` and `click_test` only. Before the 2026-09-15 Public API release (zurb/helio#5039), only `free_response` and `click_test` saved an `asset_id` — the other types took it and silently dropped it — so check `tests preview`, which reads back each question's stimulus.
 
-`--skip-question-intro` sets `disable_instruction_card`, the editor's "Skip question introduction": the participant opens straight on the stimulus and answers instead of seeing the question text on its own card first. `edit-question --type` rebuilds the question, so pass the flag again to keep it. On a UX metric section, `edit-question <test> <section> --skip-question-intro` (no `--type`) sets it on its own, and a `--ux-metrics-json` section override takes `"disable_instruction_card": true`. `tests preview` marks each question whose introduction card is skipped.
+`--skip-question-intro` sets `disable_instruction_card`, the editor's "Skip question introduction": the participant opens straight on the stimulus and answers instead of seeing the question text on its own card first. `edit-question --type` rebuilds the question from the flags you give it, so pass the flag again to keep it. On a UX metric section, `edit-question <test> <section> --skip-question-intro` (no `--type`) sets it on its own, and a `--ux-metrics-json` section override takes `"disable_instruction_card": true`. `tests preview` marks each question whose introduction card is skipped.
+
+`--selection-limit <n>` (`selection_limit` in questions JSON) is the editor's "Selection Limit" on a multiple choice question: with `--allow-multiple`, participants can pick up to N answers (2 to the number of choices). `--allow-multiple` alone means no limit. The API had no key for this before zurb/helio#5147 (ZURB-4589), so `choice_selection_limit`, `max_selections` and the like were dropped without an error; the CLI now names those spellings as errors, and `tests preview` shows the limit as `☐ select up to N`. As with the introduction card, `edit-question --type` rebuilds the question, so pass it again to keep it.
 
 `--display-seconds` (`display_seconds` in questions JSON) is the editor's "Image Display Time": the participant sees the question's image for 5, 10 or 15 seconds, then it is hidden and the question is revealed. It is how long the image stays up, **not** a limit on how long they have to answer. It needs an image `--asset-id` on the same question (a video or audio asset is rejected), and it applies to `free_response`, `multiple_choice`, `likert`, `nps`, `ranking`, `matrix`, `point_allocation` and `max_diff`. Preference, card sort and click test reject it, since their take screens never hide the image. As with the introduction card, `edit-question --type` rebuilds the question, so leaving the flag off turns the timer off, and a UX metric section can't be given one through the API. Needs the 2026-09-19 Public API release (zurb/helio#5048).
 

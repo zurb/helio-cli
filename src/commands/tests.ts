@@ -66,7 +66,7 @@ export const QUESTION_TYPES = {
     creatable: true,
     also_accepts: 'MultipleChoice',
     required: ['type', 'instructions', 'choices'],
-    optional: ['allow_multiple', 'randomize_choices', 'branching', 'asset_id', 'disable_instruction_card', 'display_seconds'],
+    optional: ['allow_multiple', 'selection_limit', 'randomize_choices', 'branching', 'asset_id', 'disable_instruction_card', 'display_seconds'],
     example: {
       type: 'multiple_choice',
       instructions: 'How did you hear about us?',
@@ -75,7 +75,7 @@ export const QUESTION_TYPES = {
       randomize_choices: false,
     },
     notes:
-      'branching (single-select only, mutually exclusive with followup, requires a Helio Enterprise plan): [{choice: 0, action: "skip_to_question", question: 3}, {choice: 1, action: "end_test", message: "...", redirect_url: "..."}]. choice is a 0-based index; question is a 1-based question number and must be a LATER question (forward-only skips, matching the editor); on add/edit-question, section_id is also accepted (uuid or numeric id). end_test with message/redirect disqualifies with a custom end screen.',
+      'selection_limit: N makes a multi-select question "select up to N" (the editor\'s Selection Limit). It needs allow_multiple: true and runs from 2 to the number of choices; leave it out and participants can pick any number. branching (single-select only, mutually exclusive with followup, requires a Helio Enterprise plan): [{choice: 0, action: "skip_to_question", question: 3}, {choice: 1, action: "end_test", message: "...", redirect_url: "..."}]. choice is a 0-based index; question is a 1-based question number and must be a LATER question (forward-only skips, matching the editor); on add/edit-question, section_id is also accepted (uuid or numeric id). end_test with message/redirect disqualifies with a custom end screen.',
     summary_fields: 'results: [{id, text, percent, count}]',
     response_fields: 'selected: [{id, text}], text (if follow-up)',
   },
@@ -268,6 +268,10 @@ export interface TestShowResponse {
   account_id?: string;
   account_name?: string;
   introduction: string;
+  /** The editor's Thank You toggle. When false participants see Helio's default message. */
+  has_thanks_message?: boolean | null;
+  /** The custom end-of-test message (URLs come back auto-linked as HTML). */
+  thanks_message?: string | null;
   sections: SectionData[];
   /** Present since the 2026-07-30 API release; null when the test has no quota. */
   audience?: AudienceData | null;
@@ -694,8 +698,32 @@ function formatStatus(status: string): string {
   return `${color}(${status})\x1b[0m`;
 }
 
-function stripHtml(html: string): string {
-  return html.replace(/<[^>]*>/g, '').trim();
+const HTML_ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
+
+// C0 controls other than tab and newline, DEL, and C1 (0x7f-0x9f). Printed to
+// a terminal they would act as escape sequences, so `&#27;[31m` in a question
+// could recolour or rewrite the screen.
+const CONTROL_CHARS = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/g;
+
+/**
+ * Plain text from the editor's HTML. Only real tags (`<p>`, `</p>`, `<br/>`)
+ * are removed, so text like "<3 ... >" survives, and the common entities are
+ * decoded so `&amp;` prints as `&`. Entities are decoded in one pass, so
+ * `&amp;#65;` prints as `&#65;`. A numeric entity outside Unicode (or a lone
+ * surrogate) becomes U+FFFD, and control characters are dropped, whether they
+ * came from an entity or arrived raw.
+ */
+export function stripHtml(html: string): string {
+  return html
+    .replace(/<\/?[a-zA-Z][^>]*>/g, '')
+    .replace(/&(?:(amp|lt|gt|quot|apos|nbsp)|#(\d+));/g, (_, name: string | undefined, code: string | undefined) => {
+      if (name) return HTML_ENTITIES[name];
+      const point = Number(code);
+      if (point > 0x10ffff || (point >= 0xd800 && point <= 0xdfff)) return '\uFFFD';
+      return String.fromCodePoint(point);
+    })
+    .replace(CONTROL_CHARS, '')
+    .trim();
 }
 
 function printReportQuestions(questions: ReportQuestion[]): void {
@@ -814,6 +842,27 @@ function printSectionQuestions(sections: SectionData[]): void {
 }
 
 /**
+ * How many answers a multiple choice question takes, read from the columns
+ * GET /tests/:id returns. The editor saves "no limit" as
+ * enable_selection_limit false, and a limit of N as enable_selection_limit
+ * true with choice_selection_limit N, where 1 is a single-select question.
+ * A payload that already says allow_multiple (other endpoints, fixtures)
+ * wins. Null for every other type.
+ */
+export function sectionSelection(s: SectionData): { allow_multiple: boolean; selection_limit: number | null } | null {
+  const canonical = RAW_TYPE_TO_CANONICAL[s.type] ?? s.type;
+  if (canonical !== 'multiple_choice') return null;
+  const raw = s as { allow_multiple?: unknown; enable_selection_limit?: unknown; choice_selection_limit?: unknown };
+  const limit = typeof raw.choice_selection_limit === 'number' ? raw.choice_selection_limit : null;
+  if (typeof raw.allow_multiple === 'boolean') {
+    return { allow_multiple: raw.allow_multiple, selection_limit: raw.allow_multiple && raw.enable_selection_limit === true && limit != null && limit > 1 ? limit : null };
+  }
+  if (raw.enable_selection_limit === false) return { allow_multiple: true, selection_limit: null };
+  if (raw.enable_selection_limit === true && limit != null && limit > 1) return { allow_multiple: true, selection_limit: limit };
+  return { allow_multiple: false, selection_limit: null };
+}
+
+/**
  * What a question shows alongside its text: the stimulus on its one variation,
  * and whether the introduction card that normally comes first is skipped. Both
  * are write fields, and a stimulus the API dropped is indistinguishable from
@@ -838,6 +887,14 @@ export function sectionStimulusLines(s: SectionData): string[] {
   }
   if (s.disable_instruction_card) {
     lines.push('      \x1b[90mⓘ skips the question introduction — opens straight on the stimulus and answers\x1b[0m');
+  }
+  const selection = sectionSelection(s);
+  if (selection?.allow_multiple) {
+    lines.push(
+      selection.selection_limit
+        ? `      \x1b[90m☐ select up to ${selection.selection_limit}\x1b[0m`
+        : '      \x1b[90m☐ select any number\x1b[0m',
+    );
   }
   return lines;
 }
@@ -1095,6 +1152,7 @@ export function buildQuestionsFromSections(sections: SectionData[] | undefined):
         disable_instruction_card: s.disable_instruction_card === true,
         // Same rule for the timer: only where a write would accept it.
         ...(TIMED_QUESTION_TYPES.has(canonical) ? { display_seconds: sectionDisplaySeconds(s) } : {}),
+        ...selectionWriteFields(s),
         // Metric-owned questions are auto-generated and structurally locked —
         // agents must not treat them as editable hand-written questions.
         ...(metric ? { ux_metric: { id: metric.id, type: metric.type } } : {}),
@@ -1126,8 +1184,18 @@ export function mergeSectionFieldsIntoReportQuestions(
       ...(STIMULUS_ASSET_TYPES.has(canonical) ? { asset_id: s.variations?.[0]?.asset_id ?? null } : {}),
       disable_instruction_card: s.disable_instruction_card === true,
       ...(TIMED_QUESTION_TYPES.has(canonical) ? { display_seconds: sectionDisplaySeconds(s) } : {}),
+      ...selectionWriteFields(s),
     };
   });
+}
+
+/** allow_multiple / selection_limit as a write takes them, on multiple choice only. */
+function selectionWriteFields(s: SectionData): Record<string, unknown> {
+  const selection = sectionSelection(s);
+  if (!selection) return {};
+  return selection.selection_limit
+    ? { allow_multiple: true, selection_limit: selection.selection_limit }
+    : { allow_multiple: selection.allow_multiple };
 }
 
 // Parses a JSON array from an inline string or @path/to/file.json, prefixing
@@ -1163,6 +1231,11 @@ export function parsePositiveInt(value: string | undefined, flagName: string): n
  * the same shape as a bad value in JSON.
  */
 function parseDisplaySecondsFlag(value: string): number | string {
+  return /^\s*\d+\s*$/.test(value) ? Number(value) : value;
+}
+
+/** Same idea for --selection-limit: validateQuestions reports a bad value. */
+function parseSelectionLimitFlag(value: string): number | string {
   return /^\s*\d+\s*$/.test(value) ? Number(value) : value;
 }
 
@@ -1204,6 +1277,8 @@ interface QuestionInput {
   scale_type?: string;
   custom_choices?: unknown[];
   allow_multiple?: boolean;
+  /** "Select up to N" on a multi-select multiple_choice question. */
+  selection_limit?: unknown;
   randomize_choices?: boolean;
   asset_id?: string;
   site_link?: string;
@@ -1879,6 +1954,8 @@ export function validateQuestions(
       errors.push({ question: num, field: 'disable_instruction_card', message: 'Must be true or false' });
     }
 
+    validateSelectionLimit(q, canonical, num, errors);
+
     validateDisplaySeconds(q, canonical, num, errors);
 
     // Type-specific validation
@@ -2052,6 +2129,57 @@ export function validateQuestions(
   }
 
   return errors;
+}
+
+// Names an agent reaches for when it wants "select up to N". GET /tests/:id
+// returns choice_selection_limit, which makes it look writable; none of these
+// is, and the API drops them without an error.
+const SELECTION_LIMIT_ALIASES = ['choice_selection_limit', 'max_selections', 'max_choices', 'selection_max'];
+
+/**
+ * "Select up to N" on a multiple choice question, checked the way the API
+ * does (ZURB-4589): multiple_choice only, multi-select only, and 2 to the
+ * number of choices. One answer is what a single-select question already is.
+ */
+function validateSelectionLimit(q: QuestionInput, canonical: string, num: number, errors: ValidationError[]): void {
+  for (const alias of SELECTION_LIMIT_ALIASES) {
+    if (alias in q) {
+      errors.push({
+        question: num,
+        field: alias,
+        message: 'Not a write field, so the API would drop it. For "select up to N" send selection_limit: N with allow_multiple: true',
+      });
+    }
+  }
+
+  const limit = q.selection_limit;
+  if (limit == null) return;
+  if (canonical !== 'multiple_choice') {
+    errors.push({ question: num, field: 'selection_limit', message: 'Only multiple_choice questions take a selection limit' });
+    return;
+  }
+  if (typeof limit !== 'number' || !Number.isInteger(limit)) {
+    errors.push({ question: num, field: 'selection_limit', message: 'Must be a whole number' });
+    return;
+  }
+  if (q.allow_multiple !== true) {
+    errors.push({
+      question: num,
+      field: 'selection_limit',
+      message: 'Needs allow_multiple: true. A single-select question already allows one answer',
+    });
+    return;
+  }
+  // The API counts the choices as sent (choices.length), so this does too:
+  // ["a", "A", "b"] takes a limit of 3.
+  const count = Array.isArray(q.choices) ? q.choices.length : null;
+  if (limit < 2 || (count != null && limit > count)) {
+    errors.push({
+      question: num,
+      field: 'selection_limit',
+      message: `Must be between 2 and the number of choices${count != null ? ` (${count})` : ''}`,
+    });
+  }
 }
 
 /**
@@ -2564,6 +2692,8 @@ export type WalkthroughScreen =
       preference_options?: PreferenceOption[];
       randomize_choices: boolean;
       allow_multiple: boolean;
+      /** "Select up to N" on a multi-select question; omitted when there is no limit. */
+      selection_limit?: number;
       scale_type?: string;
       ux_metric?: string;
       site_link?: string;
@@ -2657,7 +2787,8 @@ export function buildWalkthroughScreens(test: TestShowResponse): WalkthroughScre
 
     const uxMetric = sectionMetric(s)?.type;
     const randomize = Boolean((s as { randomize_choices?: unknown }).randomize_choices);
-    const allowMultiple = Boolean((s as { allow_multiple?: unknown }).allow_multiple);
+    const selection = sectionSelection(s);
+    const allowMultiple = selection?.allow_multiple ?? Boolean((s as { allow_multiple?: unknown }).allow_multiple);
 
     const assets: WalkthroughAsset[] = (s.variations ?? [])
       .filter(v => v.has_asset || v.asset_id != null || v.screenshot_url || v.thumb_url)
@@ -2683,6 +2814,7 @@ export function buildWalkthroughScreens(test: TestShowResponse): WalkthroughScre
       ...(options ? { preference_options: options } : {}),
       randomize_choices: randomize,
       allow_multiple: allowMultiple,
+      selection_limit: selection?.selection_limit ?? undefined,
       scale_type: s.likert_type || undefined,
       ux_metric: uxMetric,
       site_link: variation?.site_link || undefined,
@@ -2820,7 +2952,11 @@ export function renderWalkthroughScreen(screen: WalkthroughScreen): string[] {
         lines.push('  \x1b[90mⓘ choices randomized per participant\x1b[0m');
       }
       if (screen.allow_multiple) {
-        lines.push('  \x1b[90mⓘ multiple selections allowed\x1b[0m');
+        lines.push(
+          screen.selection_limit
+            ? `  \x1b[90mⓘ select up to ${screen.selection_limit}\x1b[0m`
+            : '  \x1b[90mⓘ multiple selections allowed\x1b[0m',
+        );
       }
       break;
     }
@@ -3076,9 +3212,10 @@ function inputHint(screen: WalkthroughScreen): string {
     case 'multiple_choice': {
       const max = Math.min(screen.choices.length, LETTERS.length);
       const range = max ? `${LETTERS[0]}–${LETTERS[max - 1]}` : '';
-      return screen.allow_multiple
-        ? `pick one or more (${range}, comma-separated), or ↵ to skip`
-        : `pick ${range}, or ↵ to skip`;
+      if (!screen.allow_multiple) return `pick ${range}, or ↵ to skip`;
+      return screen.selection_limit
+        ? `pick up to ${screen.selection_limit} (${range}, comma-separated), or ↵ to skip`
+        : `pick one or more (${range}, comma-separated), or ↵ to skip`;
     }
     case 'free_response':
       return 'type a response, or ↵ to skip';
@@ -3111,6 +3248,9 @@ function interpretAnswer(screen: WalkthroughScreen, raw: string): { ok: true; di
       if (picks.length === 0) return { ok: true, display: '' };
       if (!screen.allow_multiple && picks.length > 1) {
         return { ok: false, message: 'This question only accepts one selection.' };
+      }
+      if (screen.selection_limit && picks.length > screen.selection_limit) {
+        return { ok: false, message: `This question accepts at most ${screen.selection_limit} selections.` };
       }
       const labels: string[] = [];
       for (const p of picks) {
@@ -3236,6 +3376,7 @@ export function walkthroughScreenJson(screen: WalkthroughScreen): Record<string,
     preference_options: screen.preference_options ?? null,
     randomize_choices: screen.randomize_choices,
     allow_multiple: screen.allow_multiple,
+    selection_limit: screen.selection_limit ?? null,
     scale_type: screen.scale_type ?? null,
     ux_metric: screen.ux_metric ?? null,
     site_link: screen.site_link ?? null,
@@ -3246,6 +3387,17 @@ export function walkthroughScreenJson(screen: WalkthroughScreen): Record<string,
     hotspots: screen.hotspots ?? null,
     renderable: screen.renderable,
   };
+}
+
+/**
+ * The custom message participants see when they finish, or null when the test
+ * shows Helio's default. GET returns the text even with the toggle off, so the
+ * toggle decides.
+ */
+export function customThanksMessage(test: TestShowResponse): string | null {
+  if (!test.has_thanks_message) return null;
+  const text = typeof test.thanks_message === 'string' ? stripHtml(test.thanks_message) : '';
+  return text || null;
 }
 
 export function registerTestsCommand(program: Command): void {
@@ -3559,6 +3711,8 @@ export function registerTestsCommand(program: Command): void {
             test: {
               ...meta,
               introduction: test.introduction ?? null,
+              // null = Helio's default thank-you message.
+              thanks_message: customThanksMessage(test),
               // null = an API older than 2026-09-19, which doesn't say.
               devices: Array.isArray(test.devices) ? test.devices : null,
               // null = an API older than 2026-11-10, which doesn't send it.
@@ -3596,6 +3750,10 @@ export function registerTestsCommand(program: Command): void {
         }
         if (test.introduction) {
           console.log(`Intro: ${test.introduction}`);
+        }
+        const thanks = customThanksMessage(test);
+        if (thanks) {
+          console.log(`Thanks: ${thanks}`);
         }
         console.log();
 
@@ -3661,6 +3819,7 @@ export function registerTestsCommand(program: Command): void {
     .option('--project-name <name>', 'Project name (resolved to UUID)')
     .requiredOption('--name <name>', 'Test name')
     .requiredOption('--intro <text>', 'Introduction text')
+    .option('--thanks-message <text>', 'Message participants see when they finish (the editor\'s Thank You message). Omit it for Helio\'s default.')
     .option(
       '--audience-type <type>',
       'Audience type: open (share link), basic (panel, no filters), targeted (panel + --demographics), advanced (panel + --audiences), customer_list (your lists + --audiences)',
@@ -3772,6 +3931,7 @@ export function registerTestsCommand(program: Command): void {
             total_sections: totalSections,
             estimated_answer_spend: spend,
           };
+          if (cmdOpts.thanksMessage !== undefined) summary.thanks_message = cmdOpts.thanksMessage;
           if (cmdOpts.audiences) summary.audiences = cmdOpts.audiences;
           if (demographics !== undefined) summary.demographics = demographics;
           if (cmdOpts.excludeTests) summary.exclude_test_ids = cmdOpts.excludeTests;
@@ -3835,6 +3995,9 @@ export function registerTestsCommand(program: Command): void {
               console.log(`  Excludes:      ${(cmdOpts.excludeTests as string[]).join(', ')}`);
             }
             console.log(`  Devices:       ${formatDevices(devices ?? [...DEVICES])}`);
+            if (cmdOpts.thanksMessage !== undefined) {
+              console.log(`  Thanks:        ${cmdOpts.thanksMessage.trim() || '(Helio default)'}`);
+            }
             console.log(`  Questions:     ${questionCount}`);
             if (uxMetricTypeNames.length > 0) {
               console.log(`  UX metrics:    ${uxMetricTypeNames.join(', ')} (${metricSectionCount} auto-generated sections)`);
@@ -3893,6 +4056,8 @@ export function registerTestsCommand(program: Command): void {
         if (demographics !== undefined) body.demographics = demographics;
         if (cmdOpts.excludeTests) body.exclude_test_ids = cmdOpts.excludeTests;
         if (devices) body.devices = devices;
+        // "" is sent too: it asks for the default screen, which the API reads the same as null.
+        if (cmdOpts.thanksMessage !== undefined) body.thanks_message = cmdOpts.thanksMessage;
 
         const data = await client.post('tests', body);
         const createWarnings = [
@@ -3923,6 +4088,7 @@ export function registerTestsCommand(program: Command): void {
     .option('--scale-type <scale>', 'Scale type (for likert)')
     .option('--custom-choices <items...>', 'Custom scale labels (for likert with scale_type=custom)')
     .option('--allow-multiple', 'Allow multiple selections (for multiple_choice)')
+    .option('--selection-limit <n>', '"Select up to N" on a multiple_choice question (the editor\'s Selection Limit): 2 to the number of choices, with --allow-multiple')
     .option('--randomize-choices', 'Randomize choice order (for multiple_choice)')
     .option('--categories <items...>', 'Categories (for matrix, card_sort)')
     .option('--points <n>', 'Total points to allocate (for point_allocation)')
@@ -3951,6 +4117,7 @@ export function registerTestsCommand(program: Command): void {
         if (cmdOpts.scaleType) question.scale_type = cmdOpts.scaleType;
         if (cmdOpts.customChoices) question.custom_choices = cmdOpts.customChoices;
         if (cmdOpts.allowMultiple) question.allow_multiple = true;
+        if (cmdOpts.selectionLimit !== undefined) question.selection_limit = parseSelectionLimitFlag(cmdOpts.selectionLimit);
         if (cmdOpts.randomizeChoices) question.randomize_choices = true;
         if (cmdOpts.categories) question.categories = cmdOpts.categories;
         if (cmdOpts.points) question.points = parsePositiveInt(cmdOpts.points, '--points');
@@ -4007,7 +4174,7 @@ export function registerTestsCommand(program: Command): void {
 
   cmd
     .command('edit-question <test-id> <section-id>')
-    .description('Replace a question on a draft test (or edit instructions/assets/choices/hotspots/brand-choice/randomize/follow-ups on a UX metric section)')
+    .description('Replace a question on a draft test, keeping its position, section id and the skip rules that point at it (or edit instructions/assets/choices/hotspots/brand-choice/randomize/follow-ups on a UX metric section)')
     .option('--type <type>', 'Question type (required for regular questions, omit for UX metric sections)')
     .option('--instructions <text>', 'Question text')
     .option('--choices <items...>', 'Choices')
@@ -4018,6 +4185,7 @@ export function registerTestsCommand(program: Command): void {
     .option('--scale-type <scale>', 'Scale type (for likert)')
     .option('--custom-choices <items...>', 'Custom scale labels')
     .option('--allow-multiple', 'Allow multiple selections')
+    .option('--selection-limit <n>', '"Select up to N" (multiple_choice with --allow-multiple; 2 to the number of choices). --type replacement only, and a replacement rebuilds the question, so pass it again to keep it.')
     .option('--randomize-choices', 'Randomize choice order')
     .option('--no-randomize-choices', 'Disable randomized choice order')
     .option('--categories <items...>', 'Categories')
@@ -4027,7 +4195,7 @@ export function registerTestsCommand(program: Command): void {
     .option('--can-skip-cards', 'Allow skipping cards')
     .option('--asset-id <id>', 'Stimulus asset ID (see add-question for the types that take one; also a safe edit on a UX metric section)')
     .option('--site-link <url>', 'Site link URL (free_response and click_test on a --type replacement; also a safe edit on a UX metric section)')
-    .option('--skip-question-intro', 'Skip the question introduction card (disable_instruction_card). On a regular question it goes with --type, and the replacement rebuilds the question, so pass it again to keep it. On a UX metric section (no --type) it is a safe edit on its own.')
+    .option('--skip-question-intro', 'Skip the question introduction card (disable_instruction_card). On a regular question it goes with --type, and the replacement rebuilds the question from the flags given, so pass it again to keep it. On a UX metric section (no --type) it is a safe edit on its own.')
     .option('--no-skip-question-intro', 'Show the question introduction card (the default)')
     .option('--display-seconds <seconds>', 'Image display timer (5, 10 or 15; needs an image --asset-id). --type replacement only, and a replacement rebuilds the question from the flags given, so pass it again to keep the timer.')
     .option('--hotspots <json>', 'Hotspots as JSON array or @path/to/file.json, for a click_test question or a click section of a UX metric: [{name?, x, y, width, height, priority?}]. Replaces the existing set.')
@@ -4054,6 +4222,7 @@ export function registerTestsCommand(program: Command): void {
         if (cmdOpts.scaleType) question.scale_type = cmdOpts.scaleType;
         if (cmdOpts.customChoices) question.custom_choices = cmdOpts.customChoices;
         if (cmdOpts.allowMultiple) question.allow_multiple = true;
+        if (cmdOpts.selectionLimit !== undefined) question.selection_limit = parseSelectionLimitFlag(cmdOpts.selectionLimit);
         if (cmdOpts.randomizeChoices !== undefined) question.randomize_choices = cmdOpts.randomizeChoices;
         if (cmdOpts.categories) question.categories = cmdOpts.categories;
         if (cmdOpts.points) question.points = parsePositiveInt(cmdOpts.points, '--points');
@@ -4117,6 +4286,7 @@ export function registerTestsCommand(program: Command): void {
             ['scale_type', '--scale-type'],
             ['custom_choices', '--custom-choices'],
             ['allow_multiple', '--allow-multiple'],
+            ['selection_limit', '--selection-limit'],
             ['categories', '--categories'],
             ['points', '--points'],
             ['points_label', '--points-label'],
@@ -4438,6 +4608,8 @@ export function registerTestsCommand(program: Command): void {
     .description('Update a draft test (fields, or replace the audience for the clone-then-retarget flow)')
     .option('--name <name>', 'New test name')
     .option('--intro <text>', 'New introduction text')
+    .option('--thanks-message <text>', 'Message participants see when they finish (the editor\'s Thank You message)')
+    .option('--clear-thanks-message', 'Go back to Helio\'s default thank-you message')
     .option('--target-audience-size <n>', 'New target audience size')
     .option(
       '--audience-type <type>',
@@ -4463,6 +4635,13 @@ export function registerTestsCommand(program: Command): void {
         const body: Record<string, unknown> = {};
         if (cmdOpts.name) body.name = cmdOpts.name;
         if (cmdOpts.intro) body.intro = cmdOpts.intro;
+        if (cmdOpts.thanksMessage !== undefined && cmdOpts.clearThanksMessage) {
+          throw new Error('Use either --thanks-message or --clear-thanks-message, not both.');
+        }
+        // !== undefined, not truthiness: --thanks-message "" is a request to reset to the default.
+        if (cmdOpts.thanksMessage !== undefined) body.thanks_message = cmdOpts.thanksMessage;
+        // null, not "": the API reads both as "back to the default".
+        if (cmdOpts.clearThanksMessage) body.thanks_message = null;
         if (cmdOpts.targetAudienceSize) body.target_audience_size = parsePositiveInt(cmdOpts.targetAudienceSize, '--target-audience-size');
 
         if (cmdOpts.excludeTests && cmdOpts.clearExcludeTests) {
@@ -4517,7 +4696,7 @@ export function registerTestsCommand(program: Command): void {
 
         if (Object.keys(body).length === 0) {
           throw new Error(
-            'At least one field is required: --name, --intro, --target-audience-size, --audience-type, --exclude-tests, --clear-exclude-tests, or --devices',
+            'At least one field is required: --name, --intro, --thanks-message, --clear-thanks-message, --target-audience-size, --audience-type, --exclude-tests, --clear-exclude-tests, or --devices',
           );
         }
 
