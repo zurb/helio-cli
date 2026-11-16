@@ -15,6 +15,15 @@
   default). `guide` documents both flags.
 
 ### Fixed
+- **`edit-question --type` keeps the question's position, section id and the
+  skip rules that point at it.** Helio used to destroy the section and insert
+  a new one, which deleted every branching rule on another question that
+  skipped to it, without an error. zurb/helio#5144 (ZURB-4587) rebuilds the
+  question on the same section, so the id that comes back is the one you sent
+  and those rules survive. Everything about the question itself still comes
+  from the call (pass `--skip-question-intro`, `--display-seconds`,
+  `--branching` and so on again to keep them). The help text, `guide` and
+  README say so.
 - Plain text read from Helio's HTML (question text, intro, the `Thanks:`
   line) keeps text that only looks like a tag, such as `<3`, and decodes
   `&amp;`, `&lt;`, `&gt;`, `&quot;` and numeric entities, once each. It drops
