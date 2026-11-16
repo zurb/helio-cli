@@ -1,9 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.14.0
 
-Needs zurb/helio#5147 (ZURB-4589, selection_limit on the Public API).
-Needs zurb/helio#5148 (ZURB-4590, introduction card on UX metric sections).
+Ships against zurb/helio#5144 (edit-question keeps the section), #5145
+(thank-you message), #5147 (selection limit) and #5148 (introduction card on
+UX metric sections), all in production.
 
 ### Added
 - **`--thanks-message <text>` on `tests create` and `tests update`**, and
