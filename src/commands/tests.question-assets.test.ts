@@ -268,8 +268,8 @@ describe('GUIDE_JSON — question stimulus and intro card', () => {
     }
   });
 
-  it('says a UX metric section edit cannot set the intro card', () => {
-    const modes = tests['edit-question'].modes as Record<string, unknown>;
-    expect(JSON.stringify(modes.ux_metric_section)).toMatch(/--skip-question-intro/);
+  it('lists the intro card as a safe edit on a UX metric section (ZURB-4590)', () => {
+    const modes = tests['edit-question'].modes as Record<string, { allowed?: string[] }>;
+    expect(JSON.stringify(modes.ux_metric_section.allowed)).toMatch(/--skip-question-intro/);
   });
 });

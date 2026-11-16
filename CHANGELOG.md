@@ -3,6 +3,7 @@
 ## Unreleased
 
 Needs zurb/helio#5147 (ZURB-4589, selection_limit on the Public API).
+Needs zurb/helio#5148 (ZURB-4590, introduction card on UX metric sections).
 
 ### Added
 - **`--thanks-message <text>` on `tests create` and `tests update`**, and
@@ -24,6 +25,13 @@ Needs zurb/helio#5147 (ZURB-4589, selection_limit on the Public API).
   API ignores them. `tests preview` shows the saved limit.
 - The limit is checked against the number of choices as sent, the same
   count the API uses.
+- **Skip the question introduction on a UX metric section.**
+  `edit-question <test> <section> --skip-question-intro` (or
+  `--no-skip-question-intro`) now works without `--type`, as a safe edit on a
+  metric section, and `--ux-metrics-json` section overrides take
+  `disable_instruction_card`. The CLI used to reject both, because the API
+  ignored the setting on metric sections. An override value must be `true`
+  or `false`; `null` is rejected before sending, as the API would 400 on it.
 
 ### Fixed
 - **`edit-question --type` keeps the question's position, section id and the
@@ -46,6 +54,12 @@ Needs zurb/helio#5147 (ZURB-4589, selection_limit on the Public API).
   previewed and walked through as single-select. Preview now prints
   `☐ select up to N` or `☐ select any number` and emits `allow_multiple` and
   `selection_limit` as write keys. The walkthrough enforces the limit.
+
+### Changed
+- `edit-question` on a regular question without `--type` now explains that
+  regular questions are rebuilt whole and points at
+  `tests preview --output json` for the fields to pass again, instead of
+  showing the API's "no question type found".
 
 ### Changed (JSON output shape, additive)
 - `tests walkthrough --output json` screens gain `selection_limit` (a number,
