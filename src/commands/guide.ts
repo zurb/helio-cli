@@ -549,7 +549,7 @@ export const GUIDE_JSON = {
         one_of_required: ['--ux-metrics <types...>', '--ux-metrics-json <json>', '--questions <json>'],
         recommended_shape: 'Lead with --ux-metrics (scored, validated sections) and use --questions only for what no metric covers. See ux_metrics.why_metrics_first and ux_metrics.starting_stacks.',
         project: 'Provide either --project-id <uuid> or --project-name <name> (resolved to UUID)',
-        optional: ['--audience-type <type> (default: open)', '--audiences <ids...>', '--demographics <json>', '--exclude-tests <ids...>', '--devices <names...>', '--ux-metrics <types...>', '--ux-metrics-json <json>', '--ux-metric-context <text>', '--dry-run'],
+        optional: ['--thanks-message <text>', '--audience-type <type> (default: open)', '--audiences <ids...>', '--demographics <json>', '--exclude-tests <ids...>', '--devices <names...>', '--ux-metrics <types...>', '--ux-metrics-json <json>', '--ux-metric-context <text>', '--dry-run'],
         audience_types: {
           open: 'Share-link recruiting; --audiences and --demographics are not accepted',
           basic: 'Helio panel, no filters',
@@ -625,7 +625,7 @@ export const GUIDE_JSON = {
         note: 'Validates the question before sending. Easier than building a full JSON array.',
       },
       'edit-question': {
-        description: 'Replace a question on a draft test (keeps same position), or edit safe fields on a UX metric section',
+        description: 'Replace a question on a draft test (keeps its position, section id and the skip rules that point at it), or edit safe fields on a UX metric section',
         args: '<test-id> <section-id>',
         modes: {
           regular_question: {
@@ -633,7 +633,7 @@ export const GUIDE_JSON = {
             required: ['--type <type>', '--instructions <text>'],
             options: {
               '--asset-id <id>': 'Stimulus shown with the question — same types as add-question',
-              '--skip-question-intro / --no-skip-question-intro': 'Skip or show the question introduction card (disable_instruction_card). The replacement recreates the section, so an omitted flag resets it to shown.',
+              '--skip-question-intro / --no-skip-question-intro': 'Skip or show the question introduction card (disable_instruction_card). The replacement rebuilds the question from the flags given, so an omitted flag resets it to shown.',
               '--display-seconds <seconds>': 'Image display timer (5, 10 or 15; needs an image --asset-id). The replacement rebuilds the question, so an omitted flag turns the timer off.',
             },
           },
@@ -661,7 +661,7 @@ export const GUIDE_JSON = {
           point_allocation: ['--choices <items...> (min 2)', '--points <n>', '--points-label <label>', '--asset-id <id>'],
           max_diff: ['--choices <items...> (min 4)', '--asset-id <id>'],
         },
-        note: 'Destroys and recreates the section at the same position — including its introduction card setting and image display timer, so pass --skip-question-intro / --display-seconds again to keep them.',
+        note: 'Rebuilds the question from the flags given, on the same section: its position and section id stay the same, and skip rules on other questions that point at it are kept. Everything about the question itself comes from this call, so pass --skip-question-intro / --display-seconds / --randomize-choices / --branching / --followup again to keep them.',
       },
       'remove-question': {
         description: 'Remove a question from a draft test',
@@ -676,10 +676,11 @@ export const GUIDE_JSON = {
       update: {
         description: 'Update a draft test, or replace its audience (clone-then-retarget flow)',
         args: '<id>',
-        optional: ['--name <name>', '--intro <text>', '--target-audience-size <n>', '--audience-type <type>', '--audiences <ids...>', '--demographics <json>', '--exclude-tests <ids...>', '--clear-exclude-tests', '--devices <names...>'],
+        optional: ['--name <name>', '--intro <text>', '--thanks-message <text>', '--clear-thanks-message', '--target-audience-size <n>', '--audience-type <type>', '--audiences <ids...>', '--demographics <json>', '--exclude-tests <ids...>', '--clear-exclude-tests', '--devices <names...>'],
         audience_note: '--audience-type replaces the pending quota wholesale (size carries over unless --target-audience-size is also passed); --audiences/--demographics require it. Same audience type vocabulary as create. Non-draft tests 422.',
         exclude_tests_note: '--exclude-tests replaces the exclusion list wholesale and, unlike --audiences, does NOT need --audience-type — without one it applies to the audience the test already has (so the panel-only rule is checked by the server, not the CLI). --clear-exclude-tests sends [], which is exempt from every gate, so a test can always be undone. Same cap and symmetry rules as create.',
         devices_note: '--devices replaces the device set (any of desktop, tablet, mobile); omit it to leave targeting alone, and pass all three to allow every device again. Draft only — set it before send, which is when the panel reads it.',
+        thanks_message_note: '--thanks-message sets the message participants see when they finish (thanks_message; the editor\'s Thank You message), and --clear-thanks-message (or --thanks-message "") goes back to Helio\'s default. Also on create. tests preview prints it as Thanks: (null in JSON means the default).',
       },
       responses: { description: 'Get all responses', args: '<id>' },
       report: {

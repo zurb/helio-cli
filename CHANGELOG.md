@@ -5,6 +5,16 @@
 Needs zurb/helio#5147 (ZURB-4589, selection_limit on the Public API).
 
 ### Added
+- **`--thanks-message <text>` on `tests create` and `tests update`**, and
+  `--clear-thanks-message` on `update`: the message participants see when they
+  finish (`thanks_message`, the editor's Thank You message). The API read it
+  back but never wrote it, so a session that asked for one got a 200 and the
+  default message. Needs zurb/helio#5145 (ZURB-4588).
+- `--thanks-message ""` is sent too and resets to the default, the same as
+  `--clear-thanks-message`.
+- **Read-back.** `tests preview` prints `Thanks: <message>` under the intro and
+  adds `thanks_message` to its JSON `test` block (`null` means Helio's
+  default). `guide` documents both flags.
 - **"Select up to N" on multiple choice.** `--selection-limit <n>` on
   `add-question` and `edit-question --type`, and `selection_limit` in
   questions JSON, set the editor's Selection Limit. It needs
@@ -16,6 +26,20 @@ Needs zurb/helio#5147 (ZURB-4589, selection_limit on the Public API).
   count the API uses.
 
 ### Fixed
+- **`edit-question --type` keeps the question's position, section id and the
+  skip rules that point at it.** Helio used to destroy the section and insert
+  a new one, which deleted every branching rule on another question that
+  skipped to it, without an error. zurb/helio#5144 (ZURB-4587) rebuilds the
+  question on the same section, so the id that comes back is the one you sent
+  and those rules survive. Everything about the question itself still comes
+  from the call (pass `--skip-question-intro`, `--display-seconds`,
+  `--branching` and so on again to keep them). The help text, `guide` and
+  README say so.
+- Plain text read from Helio's HTML (question text, intro, the `Thanks:`
+  line) keeps text that only looks like a tag, such as `<3`, and decodes
+  `&amp;`, `&lt;`, `&gt;`, `&quot;` and numeric entities, once each. It drops
+  control characters (other than tab and newline), so an entity like `&#27;`
+  can't send an escape sequence to the terminal.
 - **`tests preview` and `tests walkthrough` read multi-select back
   correctly.** GET returns `enable_selection_limit` and
   `choice_selection_limit`, not `allow_multiple`, so a multi-select question

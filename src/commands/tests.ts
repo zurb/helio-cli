@@ -268,6 +268,10 @@ export interface TestShowResponse {
   account_id?: string;
   account_name?: string;
   introduction: string;
+  /** The editor's Thank You toggle. When false participants see Helio's default message. */
+  has_thanks_message?: boolean | null;
+  /** The custom end-of-test message (URLs come back auto-linked as HTML). */
+  thanks_message?: string | null;
   sections: SectionData[];
   /** Present since the 2026-07-30 API release; null when the test has no quota. */
   audience?: AudienceData | null;
@@ -694,8 +698,32 @@ function formatStatus(status: string): string {
   return `${color}(${status})\x1b[0m`;
 }
 
-function stripHtml(html: string): string {
-  return html.replace(/<[^>]*>/g, '').trim();
+const HTML_ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
+
+// C0 controls other than tab and newline, DEL, and C1 (0x7f-0x9f). Printed to
+// a terminal they would act as escape sequences, so `&#27;[31m` in a question
+// could recolour or rewrite the screen.
+const CONTROL_CHARS = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/g;
+
+/**
+ * Plain text from the editor's HTML. Only real tags (`<p>`, `</p>`, `<br/>`)
+ * are removed, so text like "<3 ... >" survives, and the common entities are
+ * decoded so `&amp;` prints as `&`. Entities are decoded in one pass, so
+ * `&amp;#65;` prints as `&#65;`. A numeric entity outside Unicode (or a lone
+ * surrogate) becomes U+FFFD, and control characters are dropped, whether they
+ * came from an entity or arrived raw.
+ */
+export function stripHtml(html: string): string {
+  return html
+    .replace(/<\/?[a-zA-Z][^>]*>/g, '')
+    .replace(/&(?:(amp|lt|gt|quot|apos|nbsp)|#(\d+));/g, (_, name: string | undefined, code: string | undefined) => {
+      if (name) return HTML_ENTITIES[name];
+      const point = Number(code);
+      if (point > 0x10ffff || (point >= 0xd800 && point <= 0xdfff)) return '\uFFFD';
+      return String.fromCodePoint(point);
+    })
+    .replace(CONTROL_CHARS, '')
+    .trim();
 }
 
 function printReportQuestions(questions: ReportQuestion[]): void {
@@ -3341,6 +3369,17 @@ export function walkthroughScreenJson(screen: WalkthroughScreen): Record<string,
   };
 }
 
+/**
+ * The custom message participants see when they finish, or null when the test
+ * shows Helio's default. GET returns the text even with the toggle off, so the
+ * toggle decides.
+ */
+export function customThanksMessage(test: TestShowResponse): string | null {
+  if (!test.has_thanks_message) return null;
+  const text = typeof test.thanks_message === 'string' ? stripHtml(test.thanks_message) : '';
+  return text || null;
+}
+
 export function registerTestsCommand(program: Command): void {
   const cmd = program.command('tests').alias('t').description('Manage tests');
 
@@ -3652,6 +3691,8 @@ export function registerTestsCommand(program: Command): void {
             test: {
               ...meta,
               introduction: test.introduction ?? null,
+              // null = Helio's default thank-you message.
+              thanks_message: customThanksMessage(test),
               // null = an API older than 2026-09-19, which doesn't say.
               devices: Array.isArray(test.devices) ? test.devices : null,
               // null = an API older than 2026-11-10, which doesn't send it.
@@ -3689,6 +3730,10 @@ export function registerTestsCommand(program: Command): void {
         }
         if (test.introduction) {
           console.log(`Intro: ${test.introduction}`);
+        }
+        const thanks = customThanksMessage(test);
+        if (thanks) {
+          console.log(`Thanks: ${thanks}`);
         }
         console.log();
 
@@ -3754,6 +3799,7 @@ export function registerTestsCommand(program: Command): void {
     .option('--project-name <name>', 'Project name (resolved to UUID)')
     .requiredOption('--name <name>', 'Test name')
     .requiredOption('--intro <text>', 'Introduction text')
+    .option('--thanks-message <text>', 'Message participants see when they finish (the editor\'s Thank You message). Omit it for Helio\'s default.')
     .option(
       '--audience-type <type>',
       'Audience type: open (share link), basic (panel, no filters), targeted (panel + --demographics), advanced (panel + --audiences), customer_list (your lists + --audiences)',
@@ -3865,6 +3911,7 @@ export function registerTestsCommand(program: Command): void {
             total_sections: totalSections,
             estimated_answer_spend: spend,
           };
+          if (cmdOpts.thanksMessage !== undefined) summary.thanks_message = cmdOpts.thanksMessage;
           if (cmdOpts.audiences) summary.audiences = cmdOpts.audiences;
           if (demographics !== undefined) summary.demographics = demographics;
           if (cmdOpts.excludeTests) summary.exclude_test_ids = cmdOpts.excludeTests;
@@ -3928,6 +3975,9 @@ export function registerTestsCommand(program: Command): void {
               console.log(`  Excludes:      ${(cmdOpts.excludeTests as string[]).join(', ')}`);
             }
             console.log(`  Devices:       ${formatDevices(devices ?? [...DEVICES])}`);
+            if (cmdOpts.thanksMessage !== undefined) {
+              console.log(`  Thanks:        ${cmdOpts.thanksMessage.trim() || '(Helio default)'}`);
+            }
             console.log(`  Questions:     ${questionCount}`);
             if (uxMetricTypeNames.length > 0) {
               console.log(`  UX metrics:    ${uxMetricTypeNames.join(', ')} (${metricSectionCount} auto-generated sections)`);
@@ -3986,6 +4036,8 @@ export function registerTestsCommand(program: Command): void {
         if (demographics !== undefined) body.demographics = demographics;
         if (cmdOpts.excludeTests) body.exclude_test_ids = cmdOpts.excludeTests;
         if (devices) body.devices = devices;
+        // "" is sent too: it asks for the default screen, which the API reads the same as null.
+        if (cmdOpts.thanksMessage !== undefined) body.thanks_message = cmdOpts.thanksMessage;
 
         const data = await client.post('tests', body);
         const createWarnings = [
@@ -4102,7 +4154,7 @@ export function registerTestsCommand(program: Command): void {
 
   cmd
     .command('edit-question <test-id> <section-id>')
-    .description('Replace a question on a draft test (or edit instructions/assets/choices/hotspots/brand-choice/randomize/follow-ups on a UX metric section)')
+    .description('Replace a question on a draft test, keeping its position, section id and the skip rules that point at it (or edit instructions/assets/choices/hotspots/brand-choice/randomize/follow-ups on a UX metric section)')
     .option('--type <type>', 'Question type (required for regular questions, omit for UX metric sections)')
     .option('--instructions <text>', 'Question text')
     .option('--choices <items...>', 'Choices')
@@ -4123,9 +4175,9 @@ export function registerTestsCommand(program: Command): void {
     .option('--can-skip-cards', 'Allow skipping cards')
     .option('--asset-id <id>', 'Stimulus asset ID (see add-question for the types that take one; also a safe edit on a UX metric section)')
     .option('--site-link <url>', 'Site link URL (free_response and click_test on a --type replacement; also a safe edit on a UX metric section)')
-    .option('--skip-question-intro', 'Skip the question introduction card (disable_instruction_card). --type replacement only, and a replacement recreates the section, so pass it again to keep it.')
+    .option('--skip-question-intro', 'Skip the question introduction card (disable_instruction_card). --type replacement only, and a replacement rebuilds the question from the flags given, so pass it again to keep it.')
     .option('--no-skip-question-intro', 'Show the question introduction card (the default)')
-    .option('--display-seconds <seconds>', 'Image display timer (5, 10 or 15; needs an image --asset-id). --type replacement only, and a replacement recreates the section, so pass it again to keep the timer.')
+    .option('--display-seconds <seconds>', 'Image display timer (5, 10 or 15; needs an image --asset-id). --type replacement only, and a replacement rebuilds the question from the flags given, so pass it again to keep the timer.')
     .option('--hotspots <json>', 'Hotspots as JSON array or @path/to/file.json, for a click_test question or a click section of a UX metric: [{name?, x, y, width, height, priority?}]. Replaces the existing set.')
     .option('--brand-choice <index>', '0-based index of the choice that is your brand (brand_score market recognition section only)')
     .option('--branching <json>', 'Branching as JSON array or @file (single-select multiple_choice; requires a Helio Enterprise account): [{choice, action: skip_to_question|end_test, question?|section_id?, message?, redirect_url?}]. Skips are forward-only.')
@@ -4537,6 +4589,8 @@ export function registerTestsCommand(program: Command): void {
     .description('Update a draft test (fields, or replace the audience for the clone-then-retarget flow)')
     .option('--name <name>', 'New test name')
     .option('--intro <text>', 'New introduction text')
+    .option('--thanks-message <text>', 'Message participants see when they finish (the editor\'s Thank You message)')
+    .option('--clear-thanks-message', 'Go back to Helio\'s default thank-you message')
     .option('--target-audience-size <n>', 'New target audience size')
     .option(
       '--audience-type <type>',
@@ -4562,6 +4616,13 @@ export function registerTestsCommand(program: Command): void {
         const body: Record<string, unknown> = {};
         if (cmdOpts.name) body.name = cmdOpts.name;
         if (cmdOpts.intro) body.intro = cmdOpts.intro;
+        if (cmdOpts.thanksMessage !== undefined && cmdOpts.clearThanksMessage) {
+          throw new Error('Use either --thanks-message or --clear-thanks-message, not both.');
+        }
+        // !== undefined, not truthiness: --thanks-message "" is a request to reset to the default.
+        if (cmdOpts.thanksMessage !== undefined) body.thanks_message = cmdOpts.thanksMessage;
+        // null, not "": the API reads both as "back to the default".
+        if (cmdOpts.clearThanksMessage) body.thanks_message = null;
         if (cmdOpts.targetAudienceSize) body.target_audience_size = parsePositiveInt(cmdOpts.targetAudienceSize, '--target-audience-size');
 
         if (cmdOpts.excludeTests && cmdOpts.clearExcludeTests) {
@@ -4616,7 +4677,7 @@ export function registerTestsCommand(program: Command): void {
 
         if (Object.keys(body).length === 0) {
           throw new Error(
-            'At least one field is required: --name, --intro, --target-audience-size, --audience-type, --exclude-tests, --clear-exclude-tests, or --devices',
+            'At least one field is required: --name, --intro, --thanks-message, --clear-thanks-message, --target-audience-size, --audience-type, --exclude-tests, --clear-exclude-tests, or --devices',
           );
         }
 
